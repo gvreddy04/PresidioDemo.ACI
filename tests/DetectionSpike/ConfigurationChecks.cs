@@ -4,7 +4,7 @@ using PresidioDemo.Protection;
 namespace PresidioDemo.Spike;
 
 /// <summary>
-/// Checks that the five recognizer files load and that invalid files stop startup (V-04, WR-011 carried over).
+/// Checks that the five recognizer files load and that invalid files stop startup (V-04, WR-014).
 /// </summary>
 public static class ConfigurationChecks
 {
@@ -29,6 +29,16 @@ public static class ConfigurationChecks
         }
         Check(sets[FeedType.PNR].Formats.Any(f => f.Entity == "DATE_OF_BIRTH") && sets.Values.All(s => s.Formats.Any(f => f.Entity == "PERSON")),
             "date-of-birth and passenger-name formats are declared", ref passed);
+        var baseline = ParityBaseline.Load(root);
+        var uncovered = UncoveredEntities(baseline, sets);
+        Check(uncovered.Count == 0, "every baseline entity has a format or built-in in its feed's file"
+            + (uncovered.Count == 0 ? "" : ": missing " + string.Join(", ", uncovered)), ref passed);
+        var withoutDateOfBirth = new Dictionary<FeedType, FeedRecognizerSet>(sets)
+        {
+            [FeedType.PNR] = sets[FeedType.PNR] with { Formats = sets[FeedType.PNR].Formats.Where(f => f.Entity != "DATE_OF_BIRTH").ToArray() },
+        };
+        Check(UncoveredEntities(baseline, withoutDateOfBirth).Contains("PNR DATE_OF_BIRTH"),
+            "the coverage check reports a baseline entity removed from its feed's file", ref passed);
 
         string scratch = Path.Combine(Path.GetTempPath(), "recognizer-checks-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
@@ -56,6 +66,22 @@ public static class ConfigurationChecks
         }
         return passed;
     }
+
+    /// <summary>
+    /// Returns each feed and entity of the frozen baseline that no format or built-in of that feed's recognizer file
+    /// declares (AC-004, WR-014). The fallback mask is not counted, so every protected entity type has a named recognizer.
+    /// </summary>
+    /// <param name="baseline">The frozen parity baseline.</param>
+    /// <param name="sets">The recognizer sets by feed.</param>
+    /// <returns>Value-free <c>feed entity</c> labels, sorted; empty when every entity is covered.</returns>
+    public static IReadOnlyList<string> UncoveredEntities(ParityBaselineDocument baseline, IReadOnlyDictionary<FeedType, FeedRecognizerSet> sets) =>
+        baseline.Protected
+            .Select(e => (Type: FeedCatalog.All.Single(f => f.FolderName == e.Feed).Type, Name: e.Feed, e.Entity))
+            .Distinct()
+            .Where(e => !sets[e.Type].Formats.Any(f => f.Entity == e.Entity) && !sets[e.Type].BuiltIns.Any(b => b.Entity == e.Entity))
+            .Select(e => e.Name + " " + e.Entity)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>
     /// Writes an invalid PNR file and requires the loader to reject it with a value-free message naming the file.

@@ -15,8 +15,18 @@ namespace PresidioDemo.Spike;
 /// <param name="Sample">The sample file name.</param>
 /// <param name="Location">The baseline location.</param>
 /// <param name="Reason">Why it is published: a keep-format match or a binary string shorter than four characters.</param>
-/// <param name="ApprovedBy">Who approved it, recorded in decisions.md.</param>
-public sealed record ParityException(string Sample, string Location, string Reason, string ApprovedBy);
+/// <param name="ApprovedBy">Who approved it, when recorded; optional (WR-019).</param>
+public sealed record ParityException(string Sample, string Location, string Reason, string? ApprovedBy = null);
+
+/// <summary>
+/// One listed false positive: a decoded string that is masked although the baseline protects nothing inside it (WR-019).
+/// </summary>
+/// <param name="Sample">The sample file name.</param>
+/// <param name="Feed">The feed folder name.</param>
+/// <param name="Location">The payload offset of the string (binary) or its JSON path.</param>
+/// <param name="Length">The string length.</param>
+/// <param name="Reason">Why masking it is accepted.</param>
+public sealed record FalsePositiveEntry(string Sample, string Feed, string Location, int Length, string Reason);
 
 /// <summary>
 /// A value-free finding: where, what entity, which format decided, and the character shape.
@@ -48,7 +58,7 @@ public static class Spike
     /// <param name="root">The repository root.</param>
     /// <param name="output">The run folder under <c>.test-runs</c>.</param>
     /// <param name="rounds">How many rounds over the production samples the throughput run makes.</param>
-    /// <returns>True when parity holds.</returns>
+    /// <returns>True when parity holds and every false positive is listed in <c>false-positives.json</c>.</returns>
     public static async Task<bool> RunAsync(string root, string output, int rounds)
     {
         var baseline = ParityBaseline.Load(root);
@@ -56,6 +66,8 @@ public static class Spike
         var exceptions = File.Exists(exceptionsFile)
             ? JsonSerializer.Deserialize<List<ParityException>>(File.ReadAllText(exceptionsFile), ParityBaseline.JsonOptions) ?? []
             : [];
+        var listedFalsePositives = JsonSerializer.Deserialize<List<FalsePositiveEntry>>(
+            File.ReadAllText(Path.Combine(root, "tests", "fixtures", "false-positives.json")), ParityBaseline.JsonOptions) ?? [];
         var protector = DetectionRun.CreateProtector(root);
 
         var results = new List<SampleResult>();
@@ -93,8 +105,11 @@ public static class Spike
             falsePositives.AddRange(FalsePositives(result, baseline.Protected.Where(e => e.Sample == Path.GetFileName(result.Path)).ToArray()));
         }
 
+        var unlistedFalsePositives = falsePositives
+            .Where(f => !listedFalsePositives.Any(l => l.Sample == f.Sample && l.Location == f.Location && l.Length == f.Length)).ToArray();
+
         var throughput = await Throughput(protector, production.Select(r => r.Path).ToArray(), rounds);
-        bool parity = unapproved.Length == 0 && pnrKept == baseline.Pnrs.Count && rebuilt == production.Length;
+        bool parity = unapproved.Length == 0 && pnrKept == baseline.Pnrs.Count && rebuilt == production.Length && unlistedFalsePositives.Length == 0;
         var negatives = results.Where(r => Path.GetFileName(r.Path).Contains("Negative_Testing", StringComparison.Ordinal))
             .Select(r => new { Sample = Path.GetFileName(r.Path), Status = r.Output is null ? "rejected" : "published", Reason = r.Reason ?? "" }).ToArray();
 
@@ -105,6 +120,7 @@ public static class Spike
             Pnrs = new { Baseline = baseline.Pnrs.Count, Unchanged = pnrKept },
             Rebuilds = new { Production = production.Length, Valid = rebuilt },
             FalsePositives = falsePositives.Count,
+            UnlistedFalsePositives = unlistedFalsePositives.Length,
             Negatives = negatives,
             Misses = misses,
             FalsePositiveList = falsePositives,
@@ -120,7 +136,7 @@ public static class Spike
             FalsePositives = falsePositives.Select(f => new { f.Sample, f.Location, f.Format, Original = Value(byName[f.Sample], f.Location, f.Length) })
         }, ParityBaseline.JsonOptions) + Environment.NewLine);
         Console.WriteLine($"SPIKE parity={summary.Parity} | protected {caught.Count}/{baseline.Protected.Count} caught, {misses.Count} missed ({unapproved.Length} unapproved) | " +
-            $"PNRs {pnrKept}/{baseline.Pnrs.Count} | rebuilds {rebuilt}/{production.Length} | false positives {falsePositives.Count}");
+            $"PNRs {pnrKept}/{baseline.Pnrs.Count} | rebuilds {rebuilt}/{production.Length} | false positives {falsePositives.Count} ({unlistedFalsePositives.Length} unlisted)");
         Console.WriteLine("SPIKE throughput " + JsonSerializer.Serialize(throughput));
         Console.WriteLine("SPIKE summary " + Path.Combine(output, "summary.json"));
         return parity;

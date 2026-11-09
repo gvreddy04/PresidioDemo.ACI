@@ -161,8 +161,8 @@ Patterns use syntax shared by .NET and the Python `regex` module and match case-
 ### Changing a format
 
 1. Edit the feed's file in `Configuration/recognizers/`. The loader rejects a bad pattern, a duplicate name, a missing anchor or an unknown element at startup.
-2. Check parity: `src/.venv/Scripts/python.exe tests/run_sample_verification.py`. Every value in [tests/fixtures/parity-baseline.json](tests/fixtures/parity-baseline.json) must stay protected or be listed in [parity-exceptions.json](tests/fixtures/parity-exceptions.json), and every PNR must stay unchanged (WR-019). The baseline is value-free: sample, location, length and entity. It was frozen from the field policies this design replaced and cannot be regenerated.
-3. Open a pull request. The recognizer files ship only inside the image built from it (PR-005), so a change reaches an environment by deploying that image.
+2. Check parity: `src/.venv/Scripts/python.exe tests/run_sample_verification.py`. Every value in [tests/fixtures/parity-baseline.json](tests/fixtures/parity-baseline.json) must stay protected or be listed in [parity-exceptions.json](tests/fixtures/parity-exceptions.json), and every PNR must stay unchanged (WR-019). A string the baseline protects nothing inside may be masked only if it is listed in [false-positives.json](tests/fixtures/false-positives.json); any other masked string fails the check. All three files are value-free: sample, location, length, and an entity or a reason. The baseline was frozen from the field policies this design replaced and cannot be regenerated. Every baseline entity type must keep a format or built-in in its feed's file (`DetectionSpike -- config-checks`).
+3. Open a pull request. The recognizer files ship only inside the image built from it (PR-005), so a change reaches an environment by deploying that image. While decoded-text detection is a POC, that image is deployed to Dev only ([deployment plan](docs/aws-deployment-plan.md)).
 
 ### Detection log
 

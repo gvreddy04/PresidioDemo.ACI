@@ -13,7 +13,7 @@ public sealed record FeedPipelineConfiguration(IReadOnlyDictionary<FeedType, Fee
     #region Methods
 
     /// <summary>
-    /// Loads and validates one recognizer XML file per feed before any input is read (WR-011 carried over).
+    /// Loads and validates one recognizer XML file per feed before any input is read (WR-014).
     /// </summary>
     /// <param name="recognizerDirectory">The directory holding <c>aci.xml</c>, <c>etkt.xml</c>, <c>pnr.xml</c>,
     /// <c>pnr-linking.xml</c> and <c>seats.xml</c>.</param>

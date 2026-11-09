@@ -219,8 +219,10 @@ async Task RunUntil(InMemoryMessageBroker broker, FixtureWorkflows workflows, Fu
         }
         await Task.Delay(20);
     }
-    workflows.Release();
+    // Cancel before releasing a blocked workflow: released first, it could finish, publish and acknowledge before the
+    // stop, so a simulated crash would sometimes complete the message.
     stop.Cancel();
+    workflows.Release();
     await running;
 }
 

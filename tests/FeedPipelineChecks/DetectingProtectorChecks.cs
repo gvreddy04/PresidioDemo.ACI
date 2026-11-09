@@ -125,6 +125,30 @@ internal static class DetectingProtectorChecks
         Check(digitsOutcome.Values[digitsField.Id].All(c => c is '*' or '#'), "a 15-digit number in the reference position is masked in full");
         Console.WriteLine("PASS malformed optional and embedded PNRs dead-letter; the embedded ACI PNR is kept while its prefix is masked; an all-digit reference is masked in full");
 
+        // WR-017: a protection that would change a PNR dead-letters. A declared format that matches the whole record
+        // reference wins over its keep and would mask the embedded PNR. (Whole-string anchors never reach protection.)
+        string scratch = Path.Combine(Path.GetTempPath(), "pnr-change-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(scratch);
+        try
+        {
+            string aciFile = Path.Combine(scratch, "aci.xml");
+            string valid = File.ReadAllText(Path.Combine(projectRoot, "src", "PresidioDemo.Core", "Configuration", "recognizers", "aci.xml"));
+            const string keepElement = "<keep name=\"unresolvedRecordReference\"";
+            Check(valid.Contains(keepElement, StringComparison.Ordinal), "aci.xml declares the unresolved record reference keep");
+            File.WriteAllText(aciFile, valid.Replace(keepElement,
+                "<format name=\"wholeReference\" entity=\"UNCLASSIFIED_IDENTIFIER\" score=\"0.95\" maskCharacter=\"*\"><pattern>\\d{9}\\w{6}</pattern></format>\n  " + keepElement));
+            var widened = new DetectingFeedProtector(new Dictionary<FeedType, FeedRecognizerSet>(sets) { [FeedType.ACI] = RecognizerConfiguration.LoadFile(aciFile, FeedType.ACI) });
+            widened.Configure();
+            await RejectAsync(() => widened.ProtectAsync(FeedType.ACI, Parse(aci), CancellationToken.None),
+                "Protection changed an embedded PNR", "a protection that would change the embedded ACI PNR dead-letters");
+        }
+        finally
+        {
+            Directory.Delete(scratch, recursive: true);
+            // The bridge keeps one registry per feed, so restore the reviewed ACI recognizers for the checks that follow.
+            protector.Configure();
+        }
+
         // R-004, R-006, R-009: JSON keys match regardless of case, reason text is scanned, a number nested under a
         // personal-data key dead-letters, and a key the recognizer file does not declare is logged as ?.
         var linkingCodec = FeedCodecRegistry.Create(FeedType.PnrLinking);

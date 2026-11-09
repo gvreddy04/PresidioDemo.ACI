@@ -1,0 +1,51 @@
+[
+  {
+    "sample": "PNR.txt",
+    "feed": "PNR",
+    "location": "56",
+    "length": 6,
+    "reason": "six-digit number masked by default"
+  },
+  {
+    "sample": "PNR.txt",
+    "feed": "PNR",
+    "location": "3312",
+    "length": 45,
+    "reason": "PNR remark masked by default"
+  },
+  {
+    "sample": "PNR.txt",
+    "feed": "PNR",
+    "location": "3388",
+    "length": 43,
+    "reason": "PNR remark masked by default"
+  },
+  {
+    "sample": "PNR.txt",
+    "feed": "PNR",
+    "location": "3580",
+    "length": 59,
+    "reason": "PNR fare remark masked by default"
+  },
+  {
+    "sample": "PNR.txt",
+    "feed": "PNR",
+    "location": "5092",
+    "length": 23,
+    "reason": "PNR remark masked by default"
+  },
+  {
+    "sample": "PNR.txt",
+    "feed": "PNR",
+    "location": "5140",
+    "length": 56,
+    "reason": "PNR fare remark masked by default"
+  },
+  {
+    "sample": "PNR_02.txt",
+    "feed": "PNR",
+    "location": "56",
+    "length": 6,
+    "reason": "six-digit number masked by default"
+  }
+]

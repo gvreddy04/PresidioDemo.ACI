@@ -16,6 +16,7 @@
     "valid": 17
   },
   "falsePositives": 7,
+  "unlistedFalsePositives": 0,
   "identicalToToday": {
     "count": 8,
     "of": 17,
@@ -335,35 +336,35 @@
     "rounds": 20,
     "messages": 340,
     "nlpNer": "on (spaCy en_core_web_lg)",
-    "messagesPerSecondPerTask": 50.6,
+    "messagesPerSecondPerTask": 46.1,
     "feeds": [
       {
         "feed": "ACI",
-        "messagesPerSecondPerTask": 57.5,
-        "tasksForEqualShareOfPeak": 7
+        "messagesPerSecondPerTask": 53.7,
+        "tasksForEqualShareOfPeak": 8
       },
       {
         "feed": "ETKT",
-        "messagesPerSecondPerTask": 69.3,
-        "tasksForEqualShareOfPeak": 6
+        "messagesPerSecondPerTask": 61.3,
+        "tasksForEqualShareOfPeak": 7
       },
       {
         "feed": "PNR",
-        "messagesPerSecondPerTask": 13.9,
-        "tasksForEqualShareOfPeak": 29
+        "messagesPerSecondPerTask": 13.2,
+        "tasksForEqualShareOfPeak": 31
       },
       {
         "feed": "PNR-Linking",
-        "messagesPerSecondPerTask": 1620.2,
-        "tasksForEqualShareOfPeak": 1
+        "messagesPerSecondPerTask": 161,
+        "tasksForEqualShareOfPeak": 3
       },
       {
         "feed": "Seats",
-        "messagesPerSecondPerTask": 2027.1,
+        "messagesPerSecondPerTask": 1449.4,
         "tasksForEqualShareOfPeak": 1
       }
     ],
-    "tasksForPeak": 44,
+    "tasksForPeak": 50,
     "assumption": "2,000 msg/s shared equally by the five feeds; one worker process per ECS task"
   },
   "rejected": [
