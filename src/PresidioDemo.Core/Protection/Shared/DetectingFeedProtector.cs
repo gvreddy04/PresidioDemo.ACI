@@ -64,8 +64,11 @@ public sealed record DetectionEvent(int Slot, string Key, int Length, string Sha
 /// The protected values for every parsed field, and one detection event per decoded string.
 /// </summary>
 /// <param name="Values">The protected value of every field, by identifier.</param>
-/// <param name="Events">The detection events, in candidate order.</param>
-public sealed record DetectionOutcome(IReadOnlyDictionary<string, string> Values, IReadOnlyList<DetectionEvent> Events);
+/// <param name="Events">The value-free detection events, in candidate order.</param>
+/// <param name="CandidateValues">The decoded value of each candidate, by slot, kept beside the events so the events stay
+/// value-free; written to the detection log only with <c>Presidio:DetectionLogValues</c> on (WR-020).</param>
+public sealed record DetectionOutcome(IReadOnlyDictionary<string, string> Values, IReadOnlyList<DetectionEvent> Events,
+    IReadOnlyList<string>? CandidateValues = null);
 
 #endregion
 
@@ -204,21 +207,23 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
             throw new InvalidDataException("A recognizer pattern timed out; input retained and no output was published.");
         }
 
+        var detected = events.Select(e => e!).ToArray();
+        var candidateValues = candidates.Select(c => c.Value).ToArray();
         foreach (int slot in anchors.Whole)
         {
             if (values[candidates[slot].Id] != candidates[slot].Value)
             {
-                throw new InvalidDataException("Protection changed a PNR.");
+                throw new DetectionTrace(detected, candidateValues).Reject("Protection changed a PNR.");
             }
         }
         foreach (var (slot, (start, length)) in anchors.Embedded)
         {
             if (!values[candidates[slot].Id].AsSpan(start, length).SequenceEqual(candidates[slot].Value.AsSpan(start, length)))
             {
-                throw new InvalidDataException("Protection changed an embedded PNR.");
+                throw new DetectionTrace(detected, candidateValues).Reject("Protection changed an embedded PNR.");
             }
         }
-        return new DetectionOutcome(values, events.Select(e => e!).ToArray());
+        return new DetectionOutcome(values, detected, candidateValues);
     }
 
     /// <summary>

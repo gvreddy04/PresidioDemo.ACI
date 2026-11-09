@@ -172,7 +172,19 @@ Patterns use syntax shared by .NET and the Python `regex` module and match case-
 PNR 3f9a… DETECT slot=12 key=- len=13 shape=AAAAAA/AAAAAA format=passengerName entity=PERSON score=0.90 decision=masked
 ```
 
-Decisions are `masked`, `replaced`, `kept`, `masked-inside`, `anchor`, `masked-by-default` and `missed-below-threshold` (a kept value with a weak detection inside it, worth a format). Lines never contain a value. `key=` shows a JSON property name only when the feed's recognizer file declares it, and `?` otherwise, because a producer could use a value as a key. Original values appear only in the local harness reports under `.test-runs/`.
+Decisions are `masked`, `replaced`, `kept`, `masked-inside`, `anchor`, `masked-by-default` and `missed-below-threshold` (a kept value with a weak detection inside it, worth a format). Lines never contain a value. `key=` shows a JSON property name only when the feed's recognizer file declares it, and `?` otherwise, because a producer could use a value as a key. Original values appear only in the local harness reports under `.test-runs/`, unless the values flag below is on.
+
+**Values in non-production (WR-020).** For testing in Local, Dev and QA, `Presidio:DetectionLogValues` (off by default, read at startup; for example `Presidio__DetectionLogValues=true`) appends the actual decoded value, JSON-encoded so it stays on one line, to each line. Every other field is unchanged:
+
+```text
+PNR 3f9a… DETECT slot=12 key=- len=13 shape=AAAAAA/AAAAAA format=passengerName entity=PERSON score=0.90 decision=masked value="MILLER/JORDAN"
+```
+
+- It needs `Presidio:DetectionLog` on as well. With only the values flag set, the worker writes no detection lines and logs one warning at startup.
+- It works only when the selected environment is `Local`, `Dev` or `QA` (an unset `DOTNET_ENVIRONMENT` falls back to `Local` and counts). In any other environment, such as `Prod`, the worker refuses to start.
+- Lines are written for published messages and for messages dead-lettered after detection ran. A message rejected before detection (malformed, or not CCSID 1208) has no lines.
+- Outside Local, the feed's log group must keep lines for at most 7 days and be readable only by the PII team role while the flag is on, and the flag is switched only through a reviewed task-definition deploy (PR-006, [deployment plan](docs/aws-deployment-plan.md)).
+- The test harness runs the same mode with `--detection-log values`.
 
 ### Results on the supplied samples
 

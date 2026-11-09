@@ -25,7 +25,7 @@ The Existing? column records what we assume; confirm each row with the platform 
 | 6 | Task role | Not needed, because the worker calls no AWS API | — |
 | 7 | Secrets Manager secret | `piidemo/dev/solace`, JSON key `password`; the broker owner sets the value | New |
 | 8 | KMS key | For the secret and the log group | Reuse an existing key, or the AWS-managed key |
-| 9 | CloudWatch log groups and alarms | One log group per feed, such as `/ecs/presidio-worker-pnr-dev`, with 30-day retention; CPU alarms for scaling; an alarm when a service's running task count drops below 1 | New |
+| 9 | CloudWatch log groups and alarms | One log group per feed, such as `/ecs/presidio-worker-pnr-dev`, with 30-day retention; CPU alarms for scaling; an alarm when a service's running task count drops below 1. While `Presidio__DetectionLogValues=true` is set for a feed (Dev or QA only), its log lines carry actual personal values: before the flag goes on, set that log group's retention to at most 7 days and limit reading to the PII team role; switch the flag only through a reviewed task-definition deploy, and restore the normal retention after it is off (PR-006) | New |
 | 10 | VPC and private subnets | Subnets that can route to the Solace broker | Reuse |
 | 11 | Security group | No inbound rules; outbound TCP 55443 to the broker and 443 to the VPC endpoints | New |
 | 12 | VPC endpoints, or NAT | `ecr.api`, `ecr.dkr`, S3 gateway, `logs`, `secretsmanager` (platform traffic only) | Reuse if present |

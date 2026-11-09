@@ -35,9 +35,11 @@ public sealed record FeedWorkerOutcome(InboundMessage Input, FeedProcessingResul
 /// <param name="logger">Writes summaries without personal data.</param>
 /// <param name="onOutcome">Optional observer, used by tests.</param>
 /// <param name="detectionLog">Whether to write the value-free detection log (<c>Presidio:DetectionLog</c>, WR-018).</param>
+/// <param name="detectionLogValues">Whether detection lines also carry the decoded values; true only when both
+/// <c>Presidio:DetectionLog</c> and <c>Presidio:DetectionLogValues</c> are on in a non-production environment (WR-020).</param>
 public sealed class FeedWorker(FeedType feed, MessageRoute route, MessagingOptions options, IMessageConsumer consumer,
     IMessagePublisher publisher, FeedMessageProcessor processor, ILogger logger, Func<FeedWorkerOutcome, ValueTask>? onOutcome = null,
-    bool detectionLog = false)
+    bool detectionLog = false, bool detectionLogValues = false)
 {
 
     #region Fields and Constants
@@ -146,9 +148,10 @@ public sealed class FeedWorker(FeedType feed, MessageRoute route, MessagingOptio
             logger.LogWarning("{Feed} {Transaction} acknowledgment failed and will be redelivered: {Reason}", FeedCatalog.Get(feed).FolderName, id.ToString("N"), ex.Message);
         }
         LogSummary(id, input, result, outbound, timer.ElapsedMilliseconds);
-        if (detectionLog && result.Workflow?.Events is { } events)
+        // Published messages and messages dead-lettered after detection ran have events (WR-018, WR-020).
+        if (detectionLog && result.DetectionEvents is { } events)
         {
-            foreach (string line in DetectionLog.Format(feed, id, events))
+            foreach (string line in DetectionLog.Format(feed, id, events, detectionLogValues ? result.DetectionValues : null))
             {
                 logger.LogInformation("{DetectionLine}", line);
             }

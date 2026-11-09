@@ -39,12 +39,21 @@ public abstract class ProtectedFeedWorkflow(IFeedProtector protector, IFeedCodec
         Console.WriteLine($"{FeedCatalog.Get(Feed).FolderName,-12} DETECTED   {outcome.Events.Count} strings | {timer.ElapsedMilliseconds} ms (includes engine wait)");
         cancellationToken.ThrowIfCancellationRequested();
         timer.Restart();
-        byte[] content = codec.Serialize(parsed, outcome.Values);
-        codec.Validate(parsed, content);
+        byte[] content;
+        try
+        {
+            content = codec.Serialize(parsed, outcome.Values);
+            codec.Validate(parsed, content);
+        }
+        catch (InvalidDataException ex) when (DetectionTrace.From(ex) is null)
+        {
+            // Detection already ran, so the dead-lettered message keeps its events for the detection log (WR-020).
+            throw new DetectionTrace(outcome.Events, outcome.CandidateValues ?? []).Reject(ex.Message, ex);
+        }
         Console.WriteLine($"{FeedCatalog.Get(Feed).FolderName,-12} SERIALIZED Original format rebuilt and validated | {timer.ElapsedMilliseconds} ms");
         cancellationToken.ThrowIfCancellationRequested();
         var loggedFields = parsed.Fields.Select(field => field with { Value = outcome.Values[field.Id] }).ToArray();
-        return new FeedWorkflowResult(content, parsed.Fields, loggedFields, outcome.Events);
+        return new FeedWorkflowResult(content, parsed.Fields, loggedFields, outcome.Events, outcome.CandidateValues);
     }
 
     #endregion

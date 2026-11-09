@@ -1,5 +1,6 @@
 """Verify the before/after transaction log written for a published message, and the value-free detection log."""
 import json
+from pathlib import Path
 import re
 import struct
 import subprocess
@@ -125,6 +126,97 @@ class FeedLogTests(unittest.TestCase):
         output = self.harness.published("Seats", "comparison.txt")
         self.assertIn("Complete feed data (" + str(len(output)) + " bytes):", after)
         self.assertIn(output.decode("utf-8"), after)
+
+
+class DetectionLogValuesTests(unittest.TestCase):
+    """WR-020: --detection-log values (as Presidio:DetectionLogValues) appends the decoded value to every line; nothing else changes.
+
+    Assertion messages name samples and counts only, never a value."""
+
+    NOTE = "LINE ONE\nSAY \"HI\" \\ X"  # fictional, with a newline, quotes and a backslash
+
+    @classmethod
+    def setUpClass(cls):
+        samples = PROJECT / "docs" / "sample-docs"
+        inputs = {f"{p.parent.name}/{p.name}": p.read_bytes() for p in sorted(samples.rglob("*.txt"))}
+        rows = [line[2:].strip() for line in (samples / "PNR-Linking" / "PNR_LINKING.txt").read_text(encoding="utf-8").splitlines() if line.startswith("X ")]
+        linking = json.loads(bytes.fromhex("".join(rows)))
+        linking[0]["NewContactNote"] = cls.NOTE
+        inputs["PNR-Linking/values-note.bin"] = json.dumps(linking, separators=(",", ":")).encode("utf-8")
+        cls.inputs = inputs
+        cls.values = run(inputs, extra_args=["--detection-log", "values"], expect=2, prefix="detection-values-")
+        cls.addClassCleanup(cls.values.cleanup)
+        cls.on = run(inputs, extra_args=["--detection-log", "on"], expect=2, prefix="detection-on-")
+        cls.addClassCleanup(cls.on.cleanup)
+
+    @staticmethod
+    def lines(result):
+        return [line for line in result.console.splitlines() if " DETECT " in line]
+
+    @staticmethod
+    def without_transaction(line):
+        return re.sub(r"^(\S+) [0-9a-f]{32} ", r"\1 ", line)
+
+    def test_every_values_line_is_the_value_free_line_plus_the_decoded_value(self):
+        values, on = self.lines(self.values), self.lines(self.on)
+        self.assertGreater(len(values), 400)
+        self.assertEqual(len(values), len(on))
+        stripped = []
+        for line in values:
+            prefix, sep, encoded = line.partition(" value=")
+            self.assertEqual(sep, " value=", "a values line has no value field")
+            self.assertRegex(prefix, DETECT)
+            self.assertIsInstance(json.loads(encoded), str)
+            stripped.append(self.without_transaction(prefix))
+        self.assertEqual(sorted(stripped), sorted(self.without_transaction(line) for line in on))
+
+    def test_value_free_mode_still_has_no_values(self):
+        self.assertFalse(any(" value=" in line for line in self.lines(self.on)))
+        leaked = leaked_values("\n".join(line.split(" DETECT ", 1)[1] for line in self.lines(self.on)))
+        self.assertEqual(leaked, [], "values found in value-free lines: " + str(len(leaked)))
+
+    def test_an_encoded_value_stays_on_one_line_and_reads_back(self):
+        decoded = [json.loads(line.partition(" value=")[2]) for line in self.lines(self.values)]
+        self.assertEqual(decoded.count(self.NOTE), 1)
+        self.assertNotIn("LINE ONE\nSAY", self.values.console)
+
+    def test_messages_rejected_before_detection_write_no_lines(self):
+        transactions = {re.match(r"^\S+ ([0-9a-f]{32}) DETECT", line).group(1) for line in self.lines(self.values)}
+        for feed, name in [("PNR-Linking", "PNR_LINKING_03_Negative_Testing.txt"), ("Seats", "SEATS_02_Negative_Testing.txt")]:
+            item = self.values.status(feed, name, "Rejected")
+            self.assertNotIn(item["MessageId"], transactions, f"{feed}/{name} was rejected before detection but has lines")
+
+
+class DetectionLogValuesRejectionTests(unittest.TestCase):
+    """WR-020: a message dead-lettered after detection ran still gets its lines, with values in values mode."""
+
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        import tempfile
+        source = PROJECT / "src" / "PresidioDemo.Core" / "Configuration" / "recognizers"
+        cls.folder = tempfile.TemporaryDirectory(prefix="widened-recognizers-", dir=PROJECT / ".test-runs")
+        cls.addClassCleanup(cls.folder.cleanup)
+        for path in source.glob("*.xml"):
+            shutil.copy(path, cls.folder.name)
+        # A declared format matching the whole ACI record reference would mask its embedded PNR: rejected after detection.
+        aci = Path(cls.folder.name) / "aci.xml"
+        text = aci.read_text(encoding="utf-8")
+        keep = '<keep name="unresolvedRecordReference"'
+        assert text.count(keep) == 1
+        aci.write_text(text.replace(keep, '<format name="wholeReference" entity="UNCLASSIFIED_IDENTIFIER" score="0.95" maskCharacter="*">'
+                                          r'<pattern>\d{9}\w{6}</pattern></format>' + '\n  ' + keep), encoding="utf-8")
+        sample = (PROJECT / "docs" / "sample-docs" / "ACI" / "ACI.txt").read_bytes()
+        cls.result = run({"ACI/ACI.txt": sample}, extra_args=["--detection-log", "values", "--recognizer-directory", cls.folder.name],
+                         expect=2, prefix="detection-rejected-")
+        cls.addClassCleanup(cls.result.cleanup)
+
+    def test_dead_lettered_after_detection_writes_lines_with_values(self):
+        item = self.result.status("ACI", "ACI.txt", "Rejected")
+        self.assertIn("Protection changed an embedded PNR", self.result.reason("ACI", "ACI.txt"))
+        lines = [line for line in self.result.console.splitlines() if " DETECT " in line and item["MessageId"] in line]
+        self.assertGreater(len(lines), 0)
+        self.assertTrue(all(" value=" in line for line in lines))
 
 
 if __name__ == "__main__":

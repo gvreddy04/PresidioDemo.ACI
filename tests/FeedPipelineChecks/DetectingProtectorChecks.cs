@@ -20,7 +20,8 @@ internal static class DetectingProtectorChecks
     /// <returns>A task that completes when every check passed.</returns>
     public static async Task RunAsync(string projectRoot)
     {
-        var sets = RecognizerConfiguration.Load(Path.Combine(projectRoot, "src", "PresidioDemo.Core", "Configuration", "recognizers"));
+        string recognizers = Path.Combine(projectRoot, "src", "PresidioDemo.Core", "Configuration", "recognizers");
+        var sets = RecognizerConfiguration.Load(recognizers);
         string samples = Path.Combine(projectRoot, "docs", "sample-docs");
         var protector = new DetectingFeedProtector(sets);
 
@@ -50,9 +51,30 @@ internal static class DetectingProtectorChecks
                 .Select(f => f.Value).Where(v => v.Any(char.IsAsciiLetterOrDigit) && DetectingFeedProtector.Shape(v) != v).ToHashSet(StringComparer.Ordinal);
             Check(outcome.Events.All(e => !decoded.Contains(e.Shape) && !decoded.Contains(e.Key) && !decoded.Contains(e.Format) && !decoded.Contains(e.Entity)),
                 Path.GetFileName(path) + ": no detection event field carries a decoded value");
+            // WR-020: the decoded values travel beside the events, one per slot, for the values flag only.
+            var candidateValues = (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? parsed.Fields : JsonFeedCodec.StringFields(parsed)).Select(f => f.Value);
+            Check(outcome.CandidateValues is { } carried && carried.Count == outcome.Events.Count && carried.SequenceEqual(candidateValues),
+                Path.GetFileName(path) + ": the candidate values match the decoded strings by slot");
             published++;
         }
         Console.WriteLine($"PASS {published} production samples protected, rebuilt and validated with the recognizer sets");
+
+        // WR-020: values are appended only when passed, JSON-encoded on one line; every other field is unchanged.
+        DetectionEvent[] events =
+        [
+            new(0, "", 13, "AAAAAA/AAAAAA", "passengerName", "PERSON", 0.9, DetectionDecision.Masked),
+            new(1, "", 22, "AAAA AAA", "none", "", 0, DetectionDecision.MaskedByDefault),
+        ];
+        string[] fictional = ["MILLER/JORDAN", "LINE ONE\nSAY \"HI\" \\ X"];
+        var plain = PresidioDemo.Transport.DetectionLog.Format(FeedType.PNR, Guid.Empty, events);
+        var withValues = PresidioDemo.Transport.DetectionLog.Format(FeedType.PNR, Guid.Empty, events, fictional);
+        Check(plain.All(line => !line.Contains("value=", StringComparison.Ordinal)), "lines without values carry no value field");
+        Check(plain.Zip(withValues).All(pair => pair.Second.StartsWith(pair.First + " value=", StringComparison.Ordinal)),
+            "values lines keep every value-free field and add value= last");
+        Check(withValues.All(line => !line.Contains('\n') && !line.Contains('\r')), "an encoded value never breaks the line");
+        Check(withValues.Select((line, i) => System.Text.Json.JsonSerializer.Deserialize<string>(line[(line.IndexOf(" value=", StringComparison.Ordinal) + 7)..]) == fictional[i]).All(ok => ok),
+            "each encoded value reads back exactly");
+        Console.WriteLine("PASS the detection log appends JSON-encoded values only when they are passed (WR-020)");
 
         // ACI: the PNR is found next to the passenger name whether it is string 9 or string 8 (W-019).
         foreach (string name in new[] { "ACI.txt", "ACI_05.txt" })
@@ -141,6 +163,13 @@ internal static class DetectingProtectorChecks
             widened.Configure();
             await RejectAsync(() => widened.ProtectAsync(FeedType.ACI, Parse(aci), CancellationToken.None),
                 "Protection changed an embedded PNR", "a protection that would change the embedded ACI PNR dead-letters");
+            // WR-020: a rejection after detection keeps its events and values, with the reason unchanged.
+            var afterDetection = await new FeedMessageProcessor(FeedPipelineConfiguration.Load(recognizers).CreateRouter(widened))
+                .ProcessAsync(FeedType.ACI, Guid.NewGuid(), "ACI.txt", File.ReadAllBytes(aci), CancellationToken.None);
+            Check(!afterDetection.Published && afterDetection.Reason == "Protection changed an embedded PNR."
+                && afterDetection.DetectionEvents is { Count: > 0 } kept && afterDetection.DetectionValues?.Count == kept.Count,
+                "a message dead-lettered after detection keeps its events and values, with the same reason");
+            Console.WriteLine("PASS a message dead-lettered after detection keeps its events and values for the detection log (WR-020)");
         }
         finally
         {
@@ -148,6 +177,18 @@ internal static class DetectingProtectorChecks
             // The bridge keeps one registry per feed, so restore the reviewed ACI recognizers for the checks that follow.
             protector.Configure();
         }
+        // WR-020: a message rejected before detection has no events to log.
+        var reviewed = new FeedMessageProcessor(FeedPipelineConfiguration.Load(recognizers).CreateRouter(protector));
+        foreach (var (feed, name, input) in new[]
+        {
+            (FeedType.Seats, "SEATS_02_Negative_Testing.txt", File.ReadAllBytes(Path.Combine(samples, "Seats", "SEATS_02_Negative_Testing.txt"))),
+            (FeedType.ACI, "truncated.bin", new byte[] { 0, 0, 0 }),
+        })
+        {
+            var before = await reviewed.ProcessAsync(feed, Guid.NewGuid(), name, input, CancellationToken.None);
+            Check(!before.Published && before.DetectionEvents is null && before.DetectionValues is null, name + ": rejected before detection, so nothing to log");
+        }
+        Console.WriteLine("PASS messages rejected before detection carry no events or values");
 
         // R-004, R-006, R-009: JSON keys match regardless of case, reason text is scanned, a number nested under a
         // personal-data key dead-letters, and a key the recognizer file does not declare is logged as ?.
@@ -217,7 +258,6 @@ internal static class DetectingProtectorChecks
 
         // V-09, WR-019: narrowing a format breaks parity with the frozen baseline before merge. This reconfigures the
         // PNR registry, so it runs last and restores the reviewed configuration afterwards.
-        string recognizers = Path.Combine(projectRoot, "src", "PresidioDemo.Core", "Configuration", "recognizers");
         string narrowed = Path.Combine(Path.GetTempPath(), "narrowed-pnr-" + Guid.NewGuid().ToString("N") + ".xml");
         File.WriteAllText(narrowed, File.ReadAllText(Path.Combine(recognizers, "pnr.xml"))
             .Replace("<pattern>(?&lt;![A-Z])[A-Z]{2,}(?:[ '-][A-Z]+)*/[A-Z]*(?:[ '-][A-Z]+)*</pattern>", "<pattern>(?&lt;![A-Z])[A-Z]{30,}/[A-Z]{30,}</pattern>", StringComparison.Ordinal));

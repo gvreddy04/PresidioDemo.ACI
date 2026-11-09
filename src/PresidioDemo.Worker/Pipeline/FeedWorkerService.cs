@@ -85,10 +85,19 @@ public sealed class FeedWorkerService(IMessagingConnection connection, IMessageC
             }
             var workers = routes.SelectMany(pair => Enumerable.Range(0, messaging.ConsumersPerTask).Select(_ =>
                 new FeedWorker(pair.Key, pair.Value, messaging, consumer, publisher, processor,
-                    loggers.CreateLogger("PresidioDemo.Worker." + FeedCatalog.Get(pair.Key).FolderName), detectionLog: presidio.DetectionLog).RunAsync(stoppingToken))).ToArray();
-            if (presidio.DetectionLog)
+                    loggers.CreateLogger("PresidioDemo.Worker." + FeedCatalog.Get(pair.Key).FolderName), detectionLog: presidio.DetectionLog,
+                    detectionLogValues: presidio.WritesValues).RunAsync(stoppingToken))).ToArray();
+            if (presidio.WritesValues)
+            {
+                log.LogWarning("Detection log on with values: each line also carries the actual decoded value (WR-020). Non-production only.");
+            }
+            else if (presidio.DetectionLog)
             {
                 log.LogInformation("Detection log on: one value-free line per decoded string (WR-018).");
+            }
+            else if (presidio.DetectionLogValues)
+            {
+                log.LogWarning("Presidio:DetectionLogValues has no effect while Presidio:DetectionLog is off; no detection lines are written.");
             }
             if (messaging.ConsumersPerTask > 1)
             {

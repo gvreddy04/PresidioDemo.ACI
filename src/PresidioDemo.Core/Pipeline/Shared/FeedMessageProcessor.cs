@@ -1,4 +1,5 @@
 using PresidioDemo.Feeds.Shared;
+using PresidioDemo.Protection;
 
 namespace PresidioDemo.Pipeline;
 
@@ -10,10 +11,27 @@ namespace PresidioDemo.Pipeline;
 /// <param name="Message">The original input delivery and bytes.</param>
 /// <param name="Workflow">The validated output and diagnostic field sets, or null when rejected.</param>
 /// <param name="Reason">The rejection reason, or null when published.</param>
-public sealed record FeedProcessingResult(FeedMessage Message, FeedWorkflowResult? Workflow, string? Reason)
+/// <param name="RejectedEvents">For a message rejected after detection ran, its value-free detection events; otherwise null.</param>
+/// <param name="RejectedValues">For a message rejected after detection ran, its decoded candidate values; otherwise null.</param>
+public sealed record FeedProcessingResult(FeedMessage Message, FeedWorkflowResult? Workflow, string? Reason,
+    IReadOnlyList<DetectionEvent>? RejectedEvents = null, IReadOnlyList<string>? RejectedValues = null)
 {
 
     #region Properties, Indexers
+
+    /// <summary>
+    /// Gets the decoded candidate values for the detection log (WR-020): from the published output, or from a rejection
+    /// raised after detection; null when detection did not run.
+    /// </summary>
+    /// <value>The values by event slot, or null.</value>
+    public IReadOnlyList<string>? DetectionValues => Workflow?.CandidateValues ?? RejectedValues;
+
+    /// <summary>
+    /// Gets the value-free detection events for the detection log: from the published output, or from a rejection raised
+    /// after detection; null when detection did not run.
+    /// </summary>
+    /// <value>The events, or null.</value>
+    public IReadOnlyList<DetectionEvent>? DetectionEvents => Workflow?.Events ?? RejectedEvents;
 
     /// <summary>
     /// Gets a value indicating whether the message produced validated protected output.
@@ -58,8 +76,10 @@ public sealed class FeedMessageProcessor(FeedWorkflowRouter router)
         }
         catch (Exception ex)
         {
-            // Codec and policy contracts explain themselves; anything else is reported without internal detail.
-            return new(message, null, ex is InvalidDataException ? ex.Message : "Feed processing failed.");
+            // Codec and policy contracts explain themselves; anything else is reported without internal detail. A rejection
+            // after detection keeps its events and values for the detection log (WR-020).
+            var trace = DetectionTrace.From(ex);
+            return new(message, null, ex is InvalidDataException ? ex.Message : "Feed processing failed.", trace?.Events, trace?.CandidateValues);
         }
     }
 

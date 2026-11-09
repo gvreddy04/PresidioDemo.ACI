@@ -8,6 +8,15 @@ namespace PresidioDemo.Worker;
 public sealed class PresidioOptions
 {
 
+    #region Fields and Constants
+
+    /// <summary>
+    /// The environments in which <see cref="DetectionLogValues"/> may take effect (WR-020): non-production only.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ValuesEnvironments = Array.AsReadOnly(new[] { "Local", "Dev", "QA" });
+
+    #endregion
+
     #region Properties, Indexers
 
     /// <summary>
@@ -16,6 +25,13 @@ public sealed class PresidioOptions
     /// </summary>
     /// <value>True to write one value-free line per decoded string.</value>
     public bool DetectionLog { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether each detection log line also carries the actual decoded value (WR-020). Off by default; it
+    /// takes effect only with <see cref="DetectionLog"/> on, and only in <see cref="ValuesEnvironments"/>. Read at startup.
+    /// </summary>
+    /// <value>True to append the JSON-encoded decoded value to each detection log line.</value>
+    public bool DetectionLogValues { get; set; }
 
     /// <summary>
     /// Gets or sets the Python virtual environment folder, or null for the project's src/.venv.
@@ -29,6 +45,13 @@ public sealed class PresidioOptions
     /// </summary>
     /// <value>The folder path, by default <c>Configuration/recognizers</c>.</value>
     public string RecognizerDirectory { get; set; } = "Configuration/recognizers";
+
+    /// <summary>
+    /// Gets whether detection log lines carry decoded values: both <see cref="DetectionLog"/> and
+    /// <see cref="DetectionLogValues"/> are on (WR-020).
+    /// </summary>
+    /// <value>True when values are appended to detection log lines.</value>
+    public bool WritesValues => DetectionLog && DetectionLogValues;
 
     #endregion
 
@@ -64,6 +87,20 @@ public sealed class PresidioOptions
             }
         }
         return options;
+    }
+
+    /// <summary>
+    /// Stops startup when <see cref="DetectionLogValues"/> is on in an environment outside <see cref="ValuesEnvironments"/>
+    /// (WR-020). The name is the selected environment, so an unset <c>DOTNET_ENVIRONMENT</c> that falls back to Local counts.
+    /// </summary>
+    /// <param name="environment">The selected environment name.</param>
+    /// <exception cref="InvalidOperationException">The values flag is on outside Local, Dev and QA.</exception>
+    public void RequireValuesEnvironment(string environment)
+    {
+        if (DetectionLogValues && !ValuesEnvironments.Contains(environment, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Presidio:DetectionLogValues is allowed only in the Local, Dev and QA environments.");
+        }
     }
 
     #endregion

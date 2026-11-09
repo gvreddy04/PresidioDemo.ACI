@@ -96,6 +96,27 @@ var detectionLogOn = new ConfigurationBuilder().AddConfiguration(local).AddInMem
 Require(PresidioOptions.Load(detectionLogOn, runRoot).DetectionLog, "Presidio:DetectionLog=true turns the detection log on");
 var detectionLogTypo = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DetectionLogs", "true")]).Build();
 Reject(() => PresidioOptions.Load(detectionLogTypo, runRoot), "a misspelled detection-log key stops startup");
+// WR-020: values in detection lines only with both flags on, and only in Local, Dev and QA.
+var defaults = PresidioOptions.Load(local, runRoot);
+Require(!defaults.DetectionLogValues && !defaults.WritesValues, "detection log values are off by default (WR-020)");
+defaults.RequireValuesEnvironment("Prod");
+Require(true, "with the values flag off, any environment starts");
+var valuesOn = new ConfigurationBuilder().AddConfiguration(local)
+    .AddInMemoryCollection([new("Presidio:DetectionLog", "true"), new("Presidio:DetectionLogValues", "true")]).Build();
+var withValues = PresidioOptions.Load(valuesOn, runRoot);
+Require(withValues.WritesValues, "Presidio:DetectionLogValues=true with the detection log on writes values");
+foreach (string allowed in new[] { "Local", "Dev", "QA", "dev", localName })
+{
+    withValues.RequireValuesEnvironment(allowed);
+}
+Require(true, "values are allowed in Local, Dev and QA (any case), and when an unset DOTNET_ENVIRONMENT falls back to Local");
+foreach (string refused in new[] { "Prod", "Production", "Stage" })
+{
+    Reject(() => withValues.RequireValuesEnvironment(refused), $"values in the {refused} environment stop startup");
+}
+var valuesOnly = PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(local)
+    .AddInMemoryCollection([new("Presidio:DetectionLogValues", "true")]).Build(), runRoot);
+Require(valuesOnly.DetectionLogValues && !valuesOnly.WritesValues, "values without the detection log write nothing (the worker warns at startup)");
 foreach (string removed in new[] { "PolicyFile", "XdrLayoutFile", "ReferenceLayoutFile" })
 {
     var oldKey = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:" + removed, "Configuration/x.xml")]).Build();

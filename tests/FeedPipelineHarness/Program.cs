@@ -19,7 +19,7 @@ using PresidioDemo.Worker;
 //   <output>/logs/<feed>/<file>.log.txt       full before/after transaction log (contains original data; tests only)
 //   <output>/report.json                      one item per input file
 // Exit codes: 0 every file published, 2 at least one rejected, 1 configuration or usage error.
-const string usage = "Usage: FeedPipelineHarness --input <folder> --output <folder> [--recognizer-directory <folder>] [--detection-log on|off] [--fail-publishes <n>]";
+const string usage = "Usage: FeedPipelineHarness --input <folder> --output <folder> [--recognizer-directory <folder>] [--detection-log on|off|values] [--fail-publishes <n>]";
 string project = AppContext.BaseDirectory;
 while (!File.Exists(Path.Combine(project, "PresidioDemo.slnx")))
 {
@@ -42,7 +42,7 @@ for (int i = 0; i < args.Length; i += 2)
     settings[args[i]] = args[i] is "--fail-publishes" or "--detection-log" ? args[i + 1] : Path.GetFullPath(args[i + 1]);
 }
 if (!settings.ContainsKey("--input") || !settings.ContainsKey("--output") || !int.TryParse(settings["--fail-publishes"], out int failPublishes) ||
-    settings["--detection-log"] is not ("on" or "off"))
+    settings["--detection-log"] is not ("on" or "off" or "values"))
 {
     Console.Error.WriteLine(usage);
     return 1;
@@ -87,16 +87,19 @@ try
     protector.Configure();
     var processor = new FeedMessageProcessor(pipeline.CreateRouter(protector));
     using var stop = new CancellationTokenSource();
-    bool detectionLog = settings["--detection-log"] == "on";
+    bool detectionLog = settings["--detection-log"] is "on" or "values";
+    bool detectionLogValues = settings["--detection-log"] == "values";
     var workers = routes.Select(pair => new FeedWorker(pair.Key, pair.Value, messaging, broker, broker, processor, NullLogger.Instance, outcome =>
     {
         outcomes[outcome.Input.CorrelationId!] = outcome;
-        if (detectionLog && outcome.Result.Workflow?.Events is { } events)
+        if (detectionLog && outcome.Result.DetectionEvents is { } events)
         {
-            // The same value-free lines the worker writes with Presidio:DetectionLog on (WR-018).
+            // The same lines the worker writes: value-free with Presidio:DetectionLog on (WR-018), with values in "values"
+            // mode as with Presidio:DetectionLogValues on (WR-020); published and dead-lettered-after-detection messages.
             lock (outcomes)
             {
-                foreach (string line in DetectionLog.Format(pair.Key, outcome.Result.Message.Delivery.MessageId, events))
+                foreach (string line in DetectionLog.Format(pair.Key, outcome.Result.Message.Delivery.MessageId, events,
+                    detectionLogValues ? outcome.Result.DetectionValues : null))
                 {
                     Console.WriteLine(line);
                 }
