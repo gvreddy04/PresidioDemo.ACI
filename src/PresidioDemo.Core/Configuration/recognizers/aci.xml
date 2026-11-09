@@ -7,31 +7,45 @@
 -->
 <recognizers feed="ACI" threshold="0.5" defaultMaskCharacter="*">
   <!-- The PNR is the PNR-shaped candidate just before the first passenger name (WR-017). -->
+  <!-- Example: strings K7QX2M then MILLER/JORDAN: K7QX2M is the PNR and stays unchanged. -->
   <pnrAnchor before="passengerName" offset="1" />
   <!-- The unresolved record reference embeds a PNR after its nine-digit prefix; it must stay unchanged. The PNR part
        must hold a letter, so an all-digit number (such as a 15-digit card number) is not a record reference. -->
+  <!-- Example: 123456789K7QX2M publishes as *********K7QX2M (the PNR K7QX2M is kept). -->
   <pnrAnchor within="unresolvedRecordReference" optional="true"><pattern>\d{9}(?&lt;pnr>\S{6})</pattern></pnrAnchor>
 
+  <!-- Example: MILLER/JORDAN or O'NEIL/ANN MARIE, masked in full: MILLER/JORDAN -> *************. -->
   <format name="passengerName" entity="PERSON" score="0.9" maskCharacter="*">
     <pattern>(?&lt;![A-Z])[A-Z]{2,}(?:[ '-][A-Z]+)*/[A-Z]*(?:[ '-][A-Z]+)*</pattern>
   </format>
+  <!-- Example: DA12345678 -> **********. -->
   <format name="loyaltyNumber" entity="LOYALTY_NUMBER" score="0.85" maskCharacter="*">
     <pattern>(?&lt;![A-Z0-9])[A-Z]{2}\d{6,12}(?!\d)</pattern>
   </format>
   <!-- Nine-digit prefix of the unresolved record reference; the PNR after it stays unchanged. -->
+  <!-- Example: in 123456789K7QX2M, the prefix 123456789 -> *********. -->
   <format name="recordReferencePrefix" entity="UNCLASSIFIED_IDENTIFIER" score="0.85" maskCharacter="*">
     <pattern>^\d{9}(?=\S{6}$)</pattern>
   </format>
 
+  <!-- Example: 123456789K7QX2M (kept; the prefix inside is masked by recordReferencePrefix). -->
   <keep name="unresolvedRecordReference" scan="true"><pattern>\d{9}(?=\S{0,5}[A-Z])\S{6}</pattern></keep>
+  <!-- Example: 20261109. -->
   <keep name="date"><pattern>\d{8}</pattern></keep>
+  <!-- Example: 20261109 14.05.33.120. -->
   <keep name="timestamp"><pattern>\d{8} \d{2}\.\d{2}\.\d{2}\.\d{3}</pattern></keep>
+  <!-- Example: 14.05.33.120. -->
   <keep name="time"><pattern>\d{2}\.\d{2}\.\d{2}\.\d{3}</pattern></keep>
+  <!-- Example: 3412. -->
   <keep name="aircraftNumber"><pattern>\d{4}</pattern></keep>
+  <!-- Example: B12, or C7 with a leading space. -->
   <keep name="gate"><pattern> ?[A-Z]\d{1,3}</pattern></keep>
+  <!-- Example: UNKNOWN, or the truncated UNKNOW. -->
   <keep name="processName"><pattern>UNKNOWN?</pattern></keep>
+  <!-- Example: **** (already masked upstream). -->
   <keep name="placeholder"><pattern>\*+</pattern></keep>
 
+  <!-- Built-ins, for strings no format or keep covers. Examples: jordan.miller@example.com, 10.20.30.40, 378282246310005 (a published test card number), and a spaCy PERSON such as JORDAN MILLER. -->
   <builtIn entity="EMAIL_ADDRESS" />
   <builtIn entity="IP_ADDRESS" />
   <builtIn entity="CREDIT_CARD" />
