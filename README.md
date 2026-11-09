@@ -289,7 +289,7 @@ dotnet run --project tools/FeedSampleSender
 
 Protected messages are published to the `airline/<feed>/protected` topics and rejected ones go to the `q.<feed>.dlq` queues. A topic keeps nothing without a subscriber, so to inspect protected output locally, create a queue in the PubSub+ Manager (http://localhost:8080, user `admin`) with the subscription `airline/>` before sending. Ctrl+C stops the worker after the current messages; unacknowledged messages are redelivered on the next start. `docker compose -f deploy/docker-compose.yml down` removes the broker and its queues.
 
-Verified locally with Docker Desktop and broker 10.26.0.9163: the 20 sample files produced 17 protected messages and 3 dead-lettered negative-test messages, and all input queues drained.
+Verified locally with Docker Desktop and broker 10.26.0.9163: the 20 sample files produced 18 protected messages and 2 dead-lettered negative-test messages (`PNR_LINKING_03` and `SEATS_02`), and all input queues drained.
 
 To run a deployed environment, set `DOTNET_ENVIRONMENT` (for example `Dev`) and `SOLACE_PASSWORD`, then start `PresidioDemo.Worker`. It exits with code 1 and one message if the settings are invalid or the broker is unreachable.
 
@@ -308,7 +308,7 @@ docker compose -f deploy/docker-compose.yml logs -f worker   # wait for READY
 
 Then send the samples from the host as above (`dotnet run --project tools/FeedSampleSender`). `docker compose -f deploy/docker-compose.yml --profile worker down` stops both.
 
-Verified with Docker Desktop: the worker container (1.8 GB image) was ready about 4 seconds after connecting, processed the 20 samples into 17 protected and 3 dead-lettered messages, and stopped cleanly with exit code 0 on SIGTERM.
+Verified with Docker Desktop: the worker container (1.8 GB image) was ready about 4 seconds after connecting, processed the 20 samples into 18 protected and 2 dead-lettered messages, and stopped cleanly with exit code 0 on SIGTERM.
 
 **Dev broker.** Copy [deploy/.env.dev.example](deploy/.env.dev.example) to `deploy/.env.dev` and replace the DemoAir stand-ins with the real Dev host, VPN, user, password, queues and topics. Put the broker's CA certificate (PEM) in `deploy/certs/`. Both are git-ignored; never commit real values. Give `Solace__ClientName` a value of your own, because the broker disconnects an existing connection that uses the same client name.
 

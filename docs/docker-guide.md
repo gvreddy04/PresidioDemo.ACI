@@ -109,7 +109,7 @@ The sender connects as `presidio-worker-local-sender`, so it does not disconnect
 docker logs presidio-worker-local
 ```
 
-Expect 17 `PUBLISHED` and 3 `DEAD-LETTERED` lines; the three dead-lettered files are the `_Negative_Testing` samples. To inspect protected messages, open PubSub+ Manager at http://localhost:8080 (user `admin`) and create a queue subscribed to `airline/>` before sending the samples; a topic keeps nothing without a subscriber.
+Expect 18 `PUBLISHED` and 2 `DEAD-LETTERED` lines. The dead-lettered files are `PNR_LINKING_03_Negative_Testing` (a date of birth sent as a JSON number) and `SEATS_02_Negative_Testing` (an MQ export without CCSID 1208); `PNR_LINKING_02_Negative_Testing` is published with its unlisted field masked. To inspect protected messages, open PubSub+ Manager at http://localhost:8080 (user `admin`) and create a queue subscribed to `airline/>` before sending the samples; a topic keeps nothing without a subscriber.
 
 ### Step 7: Stop when you are done
 
