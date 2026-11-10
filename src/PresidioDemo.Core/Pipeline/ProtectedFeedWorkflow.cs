@@ -46,7 +46,7 @@ public abstract class ProtectedFeedWorkflow(IFeedProtector protector, IFeedCodec
         catch (InvalidDataException ex) when (DetectionTrace.From(ex) is null)
         {
             // Detection already ran, so the dead-lettered message keeps its events for the detection log (WR-020).
-            throw new DetectionTrace(outcome.Events, outcome.CandidateValues ?? []).Reject(ex.Message, ex);
+            throw new DetectionTrace(outcome.Events, outcome.CandidateValues).Reject(ex.Message, ex);
         }
         Console.WriteLine($"{FeedCatalog.Get(Feed).FolderName,-12} SERIALIZED Original format rebuilt and validated | {timer.ElapsedMilliseconds} ms");
         cancellationToken.ThrowIfCancellationRequested();

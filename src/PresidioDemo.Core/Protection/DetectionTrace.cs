@@ -6,9 +6,9 @@ namespace PresidioDemo.Core.Protection;
 /// message stays the reviewed, value-free reason (CS-007).
 /// </summary>
 /// <param name="Events">The detection events, in candidate order.</param>
-/// <param name="CandidateValues">The decoded value of each candidate, by slot; logged only with
-/// <c>Presidio:DetectionLogValues</c> on.</param>
-public sealed record DetectionTrace(IReadOnlyList<DetectionEvent> Events, IReadOnlyList<string> CandidateValues)
+/// <param name="CandidateValues">The decoded value of each candidate, by slot, or null when the protector supplied none;
+/// logged only with <c>Presidio:DetectionLogValues</c> on.</param>
+public sealed record DetectionTrace(IReadOnlyList<DetectionEvent> Events, IReadOnlyList<string>? CandidateValues)
 {
 
     #region Fields and Constants

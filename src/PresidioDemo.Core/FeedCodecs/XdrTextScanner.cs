@@ -64,7 +64,8 @@ public static class XdrTextScanner
     /// <param name="payload">The complete XDR payload; its length must be a multiple of four.</param>
     /// <returns>The candidates in payload order.</returns>
     /// <exception cref="InvalidDataException">The payload is not word aligned, or it holds text that is not printable
-    /// ASCII (WR-016: such text cannot be detected, so the message fails closed instead of publishing it).</exception>
+    /// ASCII, or a length word announces printable text that is too long or runs past the payload (WR-016: such text
+    /// cannot be detected, so the message fails closed instead of publishing it).</exception>
     public static IReadOnlyList<XdrTextCandidate> Scan(ReadOnlySpan<byte> payload)
     {
         if (payload.Length % 4 != 0)
@@ -82,6 +83,13 @@ public static class XdrTextScanner
             if (kind == SpanKind.UnsupportedText)
             {
                 throw new InvalidDataException("A counted string holds non-ASCII or control characters (for example Latin-1 or EBCDIC text) that cannot be checked for personal data; input retained and no output was published.");
+            }
+            // A length word whose text is too long for a candidate, or runs past the payload, but is followed by printable
+            // text would otherwise be skipped word by word and published unchecked (WR-016).
+            if (kind == SpanKind.RawWords && declared >= MinimumLength
+                && (declared > MaximumLength || offset + 4 + Padded((int)declared) > payload.Length) && StartsWithText(payload[(offset + 4)..]))
+            {
+                throw new InvalidDataException("A counted string is longer than the scanner accepts or runs past the end of the payload, so it cannot be checked for personal data; input retained and no output was published.");
             }
             if (kind == SpanKind.Text)
             {
@@ -139,8 +147,11 @@ public static class XdrTextScanner
                 return SpanKind.RawWords;
             }
             printable &= value is >= 0x20 and <= 0x7E;
-            // ASCII letters, digits and space, or 0xC0-0xFF (Latin-1 letters, EBCDIC letters and digits).
-            textLike += value is >= (byte)'A' and <= (byte)'Z' or >= (byte)'a' and <= (byte)'z' or >= (byte)'0' and <= (byte)'9' or (byte)' ' or >= 0xC0 ? 1 : 0;
+            // ASCII letters, digits and space; EBCDIC space (0x40) and lowercase letters (0x81-0x89, 0x91-0x99, 0xA2-0xA9);
+            // or 0xC0-0xFF (Latin-1 letters, EBCDIC uppercase letters and digits). Without the EBCDIC lowercase ranges, a
+            // mostly lowercase EBCDIC string would read as raw words and be published unchecked (WR-016).
+            textLike += value is >= (byte)'A' and <= (byte)'Z' or >= (byte)'a' and <= (byte)'z' or >= (byte)'0' and <= (byte)'9' or (byte)' '
+                or 0x40 or >= 0x81 and <= 0x89 or >= 0x91 and <= 0x99 or >= 0xA2 and <= 0xA9 or >= 0xC0 ? 1 : 0;
         }
         if (printable)
         {
@@ -148,6 +159,30 @@ public static class XdrTextScanner
         }
         // Text in another encoding is mostly letters; integer or timestamp bytes are not, so they stay raw words.
         return textLike * 2 >= length ? SpanKind.UnsupportedText : SpanKind.RawWords;
+    }
+
+    /// <summary>
+    /// Returns whether the bytes after an oversized or truncated length word look like text: at least
+    /// <see cref="MinimumLength"/> of them, and the first sixteen (or all, when fewer remain) printable ASCII. A real
+    /// following field starts with its own length word, which holds NUL bytes, so integers are not mistaken for text.
+    /// </summary>
+    /// <param name="rest">The bytes after the length word.</param>
+    /// <returns>True when the length word appears to announce text the scanner cannot take as a candidate.</returns>
+    private static bool StartsWithText(ReadOnlySpan<byte> rest)
+    {
+        int window = Math.Min(rest.Length, 16);
+        if (window < MinimumLength)
+        {
+            return false;
+        }
+        foreach (byte value in rest[..window])
+        {
+            if (value is < 0x20 or > 0x7E)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     #endregion

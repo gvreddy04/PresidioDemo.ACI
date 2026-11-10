@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using PresidioDemo.Core.FeedCodecs;
 using PresidioDemo.Core.Models;
@@ -103,10 +104,27 @@ Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0xFF, 0xFF, 0xFF, 0x00 }).Cou
 Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0, 0, 0, 0 }).Count == 0, "NUL bytes stay raw words");
 // A count followed by integer bytes without NUL (R-013) is not text in another encoding.
 Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0x8A, 0x1B, 0x2C, 0x3D }).Count == 0, "a count followed by integer bytes stays raw words");
+// Lowercase and mixed-case EBCDIC (code page 500) must fail closed too, not pass as raw words (review R-001). Fictional values.
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+var ebcdic = Encoding.GetEncoding(500);
+foreach (string text in new[] { "miller/jordan", "Jordan Miller", "jordan.miller@example.com", "seat 23c window" })
+{
+    Reject(() => XdrTextScanner.Scan(Counted(ebcdic.GetBytes(text))), "EBCDIC text: " + text.Length + " characters");
+}
+// A length word announcing printable text that is too long or runs past the payload fails closed (review R-002).
+Reject(() => XdrTextScanner.Scan([0, 1, 0, 0, .. Encoding.ASCII.GetBytes("MILLER/JORDAN MR 0000")]), "a counted string longer than 65535 bytes");
+Reject(() => XdrTextScanner.Scan([0, 0, 0, 100, .. Encoding.ASCII.GetBytes("MILLER/JORDAN MR")]), "a counted string that runs past the payload");
+// A large integer followed by a real counted string is not oversized text.
+Check(XdrTextScanner.Scan([0, 1, 0, 0, 0, 0, 0, 4, 0x44, 0x45, 0x4E, 0x31]).Count == 1, "a large integer before a real string stays raw words");
+Check(XdrTextScanner.Scan([0, 0, 0, 100, 0, 0, 0, 7]).Count == 0, "a length past the payload without text stays raw words");
 
 Console.WriteLine($"PASS Generic XDR codec checks complete | {samples.Length} samples | {compared} candidates");
 
 static byte[] envelopeOf(FeedMessage message) => FeedPayloadReader.Read(message).Payload;
+
+// An XDR counted string: big-endian length, the bytes, zero padding to a word boundary.
+static byte[] Counted(byte[] text) =>
+    [(byte)(text.Length >> 24), (byte)(text.Length >> 16), (byte)(text.Length >> 8), (byte)text.Length, .. text, .. new byte[XdrTextScanner.Padded(text.Length) - text.Length]];
 
 // A short counted string: its length word sits just before the value and equals the value length (1-3 characters).
 static bool IsShortString(byte[] payload, int offset, int length) =>

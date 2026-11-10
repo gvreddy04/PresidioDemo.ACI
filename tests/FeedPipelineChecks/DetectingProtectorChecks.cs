@@ -75,6 +75,9 @@ internal static class DetectingProtectorChecks
         Check(withValues.All(line => !line.Contains('\n') && !line.Contains('\r')), "an encoded value never breaks the line");
         Check(withValues.Select((line, i) => System.Text.Json.JsonSerializer.Deserialize<string>(line[(line.IndexOf(" value=", StringComparison.Ordinal) + 7)..]) == fictional[i]).All(ok => ok),
             "each encoded value reads back exactly");
+        // Review R-003: fewer values than events must not fail; a slot without a value keeps the value-free line.
+        var shortValues = PresidioDemo.Core.Logging.DetectionLog.Format(FeedType.PNR, Guid.Empty, events, ["MILLER/JORDAN"]);
+        Check(shortValues[0] == withValues[0] && shortValues[1] == plain[1], "a slot without a value keeps the value-free line");
         Console.WriteLine("PASS the detection log appends JSON-encoded values only when they are passed (WR-020)");
 
         // ACI: the PNR is found next to the passenger name whether it is string 9 or string 8 (W-019).

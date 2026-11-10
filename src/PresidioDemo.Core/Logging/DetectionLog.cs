@@ -33,7 +33,8 @@ public static class DetectionLog
         {
             string line = string.Create(CultureInfo.InvariantCulture,
                 $"{folder} {transaction:N} DETECT slot={e.Slot} key={(e.Key.Length == 0 ? "-" : e.Key)} len={e.Length} shape={e.Shape} format={e.Format} entity={(e.Entity.Length == 0 ? "-" : e.Entity)} score={e.Score:0.00} decision={Decision(e.Decision)}");
-            return values is null ? line : line + " value=" + JsonSerializer.Serialize(values[e.Slot]);
+            // A slot without a value (a protector that supplied fewer values) keeps the value-free line instead of failing.
+            return values is not null && e.Slot >= 0 && e.Slot < values.Count ? line + " value=" + JsonSerializer.Serialize(values[e.Slot]) : line;
         }).ToArray();
     }
 
