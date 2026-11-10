@@ -2,13 +2,13 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Messaging;
+using PresidioDemo.Core.Logging;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Core.Protection;
+using PresidioDemo.Messaging.Models;
 using PresidioDemo.Messaging.Testing;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Protection;
-using PresidioDemo.Transport;
-using PresidioDemo.Worker;
+using PresidioDemo.Worker.Pipeline;
 
 #region Execution
 

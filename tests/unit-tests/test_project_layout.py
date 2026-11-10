@@ -43,6 +43,52 @@ class ProjectLayoutTests(unittest.TestCase):
         recognizers = {p.name for p in (core / "Configuration/recognizers").glob("*.xml")}
         self.assertEqual(recognizers, {"aci.xml", "etkt.xml", "pnr.xml", "pnr-linking.xml", "seats.xml"})
 
+    def test_core_concern_folders_are_flat(self):
+        # CR-002: one folder per concern holding a base and its per-feed children; no Parser, Serializer, feed or Shared folders.
+        core = PROJECT / "src/PresidioDemo.Core"
+        concerns = {p.name for p in core.iterdir() if p.is_dir() and p.name not in ("bin", "obj")}
+        self.assertEqual(concerns, {"Configuration", "FeedCodecs", "Logging", "Models", "Pipeline", "Protection"})
+        for concern in ("FeedCodecs", "Logging", "Models", "Pipeline"):
+            self.assertEqual([p.name for p in (core / concern).iterdir() if p.is_dir()], [], concern)
+        self.assertEqual([p.name for p in (core / "Protection").iterdir() if p.is_dir()], ["python"])
+
+    def test_each_feed_has_one_class_per_concern_over_its_base(self):
+        core = PROJECT / "src/PresidioDemo.Core"
+        expected = {
+            "FeedCodecs": {"AciDecoder": "XdrFeedDecoder(FeedType.ACI)", "EtktDecoder": "XdrFeedDecoder(FeedType.ETKT)",
+                           "PnrDecoder": "XdrFeedDecoder(FeedType.PNR)", "PnrLinkingParser": "JsonFeedParser(FeedType.PnrLinking,",
+                           "SeatsParser": "JsonFeedParser(FeedType.Seats,"},
+            "Pipeline": {name + "Workflow": "ProtectedFeedWorkflow(protector, codec)" for name in ("Aci", "Etkt", "Pnr", "PnrLinking", "Seats")},
+            "Logging": {name + "FeedLogger": ": FeedLogger" for name in ("Aci", "Etkt", "Pnr", "PnrLinking", "Seats")},
+        }
+        for concern, classes in expected.items():
+            for name, base in classes.items():
+                text = (core / concern / (name + ".cs")).read_text(encoding="utf-8")
+                self.assertIn(f"public sealed class {name}", text, name)
+                self.assertIn(base, text, name)
+        for base in ("FeedCodecs/XdrFeedDecoder.cs", "FeedCodecs/JsonFeedParser.cs", "Pipeline/ProtectedFeedWorkflow.cs", "Logging/FeedLogger.cs"):
+            self.assertIn("public abstract class", (core / base).read_text(encoding="utf-8"), base)
+
+    def test_namespaces_follow_project_and_folder(self):
+        mismatches = []
+        for path in sorted((PROJECT / "src").rglob("*.cs")):
+            relative = path.relative_to(PROJECT / "src")
+            if relative.parts[1] in ("bin", "obj"):
+                continue
+            match = re.search(r"^namespace ([A-Za-z.]+);", path.read_text(encoding="utf-8"), re.M)
+            expected = ".".join(relative.parts[:-1])
+            if match and match.group(1) != expected:
+                mismatches.append(str(relative))
+        self.assertEqual(mismatches, [])
+
+    def test_test_folders_match_their_projects(self):
+        for folder in (PROJECT / "tests").iterdir():
+            projects = list(folder.glob("*.csproj")) if folder.is_dir() else []
+            if projects:
+                self.assertEqual([p.stem for p in projects], [folder.name], folder.name)
+        self.assertFalse((PROJECT / "tests/DetectionSpike").exists())
+        self.assertFalse((PROJECT / "tests/JsonFeeds").exists())
+
     def test_samples_are_finalized_txt_files_in_one_folder_per_feed_with_unchanged_bytes(self):
         expected = {
             "ACI/ACI.txt": "f038c05e590ade818748f6547c2a624d8d662a52c54d3596ad93649eafce022d",

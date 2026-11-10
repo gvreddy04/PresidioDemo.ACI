@@ -2,12 +2,13 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Messaging;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Transport;
+using PresidioDemo.Core.Logging;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
 
-namespace PresidioDemo.Worker;
+namespace PresidioDemo.Worker.Pipeline;
 
 #region Models
 

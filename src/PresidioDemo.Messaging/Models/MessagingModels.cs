@@ -1,4 +1,4 @@
-namespace PresidioDemo.Messaging;
+namespace PresidioDemo.Messaging.Models;
 
 #region Enumerations
 

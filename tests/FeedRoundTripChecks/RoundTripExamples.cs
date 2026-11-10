@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
-using PresidioDemo.Feeds.Shared;
+using PresidioDemo.Core.Models;
 
 #region Models
 

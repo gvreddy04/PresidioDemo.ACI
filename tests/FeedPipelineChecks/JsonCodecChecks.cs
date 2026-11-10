@@ -1,6 +1,7 @@
 using System.Text;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Pipeline;
+using PresidioDemo.Core.FeedCodecs;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
 
 /// <summary>
 /// Verifies JSON formatting, field coverage, transport framing and malformed-input rejection.
@@ -52,7 +53,7 @@ static class JsonCodecChecks
         }
         var linking = FeedCodecRegistry.Create(FeedType.PnrLinking);
         var link = linking.Parse(Message("[{\"PNROwner\":\"K7QX2M\",\"Customers\":[{\"PaxId\":\"PAX-1001\",\"FirstName\":\"Emily\",\"UaRecordLocator\":\"K7QX2M\",\"DOB\":null}]}]", feed: FeedType.PnrLinking));
-        Require(link.Fields.Count == 5 && JsonFeedCodec.StringFields(link).Count == 4 && link.Fields.Single(f => f.Id.EndsWith("/DOB")).Value == "",
+        Require(link.Fields.Count == 5 && JsonFeedParser.StringFields(link).Count == 4 && link.Fields.Single(f => f.Id.EndsWith("/DOB")).Value == "",
             "illustrative PNR Linking exposes four string candidates and keeps the null value out of detection");
     }
 

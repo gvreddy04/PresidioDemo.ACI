@@ -2,9 +2,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using PresidioDemo.Messaging;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Worker;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Messaging.Models;
+using PresidioDemo.Worker.Hosting;
+using PresidioDemo.Worker.Pipeline;
 
 #region Execution
 

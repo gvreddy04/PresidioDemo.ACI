@@ -15,7 +15,7 @@
 
   <ItemGroup>
     <!-- PythonHost imports the bridge from python/ next to the application, so a container image needs no source tree. -->
-    <None Update="Protection/Shared/python/presidio_demo.py" Link="python/presidio_demo.py" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Protection/python/presidio_demo.py" Link="python/presidio_demo.py" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

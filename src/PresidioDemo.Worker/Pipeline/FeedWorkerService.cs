@@ -1,11 +1,13 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Messaging;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Protection;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Core.Protection;
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
+using PresidioDemo.Worker.Hosting;
 
-namespace PresidioDemo.Worker;
+namespace PresidioDemo.Worker.Pipeline;
 
 /// <summary>
 /// Connects the broker, starts embedded Presidio and runs one feed worker per route until the host stops.

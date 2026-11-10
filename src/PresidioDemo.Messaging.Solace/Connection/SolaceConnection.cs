@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
 using SolaceSystems.Solclient.Messaging;
 
-namespace PresidioDemo.Messaging.Solace;
+namespace PresidioDemo.Messaging.Solace.Connection;
 
 /// <summary>
 /// Owns the native Solace context and session shared by the listener and publisher, and tracks publish confirmations.

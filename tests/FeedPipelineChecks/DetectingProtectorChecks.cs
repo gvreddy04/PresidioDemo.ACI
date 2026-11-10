@@ -1,8 +1,9 @@
 using System.Buffers.Binary;
 using System.Text;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Protection;
+using PresidioDemo.Core.FeedCodecs;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Core.Protection;
 
 /// <summary>
 /// Checks the decoded-text protector (T-007): PNR anchors fail closed (V-06), detection failures dead-letter,
@@ -47,12 +48,12 @@ internal static class DetectingProtectorChecks
             codec.Validate(parsed, output);
             var anchors = outcome.Events.Where(e => e.Decision == DetectionDecision.Anchor).ToArray();
             Check(anchors.Length > 0 || feed == FeedType.ETKT, Path.GetFileName(path) + ": a PNR anchor was found");
-            var decoded = (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? parsed.Fields : JsonFeedCodec.StringFields(parsed))
+            var decoded = (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? parsed.Fields : JsonFeedParser.StringFields(parsed))
                 .Select(f => f.Value).Where(v => v.Any(char.IsAsciiLetterOrDigit) && DetectingFeedProtector.Shape(v) != v).ToHashSet(StringComparer.Ordinal);
             Check(outcome.Events.All(e => !decoded.Contains(e.Shape) && !decoded.Contains(e.Key) && !decoded.Contains(e.Format) && !decoded.Contains(e.Entity)),
                 Path.GetFileName(path) + ": no detection event field carries a decoded value");
             // WR-020: the decoded values travel beside the events, one per slot, for the values flag only.
-            var candidateValues = (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? parsed.Fields : JsonFeedCodec.StringFields(parsed)).Select(f => f.Value);
+            var candidateValues = (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? parsed.Fields : JsonFeedParser.StringFields(parsed)).Select(f => f.Value);
             Check(outcome.CandidateValues is { } carried && carried.Count == outcome.Events.Count && carried.SequenceEqual(candidateValues),
                 Path.GetFileName(path) + ": the candidate values match the decoded strings by slot");
             published++;
@@ -66,8 +67,8 @@ internal static class DetectingProtectorChecks
             new(1, "", 22, "AAAA AAA", "none", "", 0, DetectionDecision.MaskedByDefault),
         ];
         string[] fictional = ["MILLER/JORDAN", "LINE ONE\nSAY \"HI\" \\ X"];
-        var plain = PresidioDemo.Transport.DetectionLog.Format(FeedType.PNR, Guid.Empty, events);
-        var withValues = PresidioDemo.Transport.DetectionLog.Format(FeedType.PNR, Guid.Empty, events, fictional);
+        var plain = PresidioDemo.Core.Logging.DetectionLog.Format(FeedType.PNR, Guid.Empty, events);
+        var withValues = PresidioDemo.Core.Logging.DetectionLog.Format(FeedType.PNR, Guid.Empty, events, fictional);
         Check(plain.All(line => !line.Contains("value=", StringComparison.Ordinal)), "lines without values carry no value field");
         Check(plain.Zip(withValues).All(pair => pair.Second.StartsWith(pair.First + " value=", StringComparison.Ordinal)),
             "values lines keep every value-free field and add value= last");
@@ -237,10 +238,10 @@ internal static class DetectingProtectorChecks
 
         // V-12, W-017: the ACI passenger-association check is gone. Raw words such as numeric passenger IDs are never
         // decoded or changed, so a message whose ID word differs is published with that word exactly as received.
-        var aciCodec = new GenericXdrFeedCodec(FeedType.ACI);
+        var aciCodec = new AciDecoder();
         var aciMessage = Message(aci, FeedType.ACI);
         var aciEnvelope = FeedPayloadReader.Read(aciMessage);
-        var aciCandidates = GenericXdrFeedCodec.Candidates(aciCodec.Parse(aciMessage));
+        var aciCandidates = XdrFeedDecoder.Candidates(aciCodec.Parse(aciMessage));
         int nameEnd = aciCandidates.First(c => c.Value.Contains('/')).Offset + aciCandidates.First(c => c.Value.Contains('/')).Length;
         int idWord = Enumerable.Range(0, aciEnvelope.Payload.Length / 4).Select(i => i * 4)
             .First(o => o > nameEnd && !aciCandidates.Any(c => o + 4 > c.Offset - 4 && o < c.Offset + c.Length + 4) &&
@@ -300,7 +301,7 @@ internal static class DetectingProtectorChecks
             .GroupBy(e => e.GetProperty("sample").GetString()!))
         {
             string path = Path.Combine(projectRoot, "docs", "sample-docs", folder, group.Key);
-            var codec = new GenericXdrFeedCodec(feed);
+            var codec = FeedCodecRegistry.Create(feed);
             var message = Message(path, feed);
             var parsed = codec.Parse(message);
             var outcome = await protector.ProtectAsync(feed, parsed, CancellationToken.None);
@@ -324,7 +325,7 @@ internal static class DetectingProtectorChecks
     /// <summary>
     /// Returns the codec the decoded-text path uses for a feed.
     /// </summary>
-    private static IFeedCodec Codec(FeedType feed) => feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? new GenericXdrFeedCodec(feed) : FeedCodecRegistry.Create(feed);
+    private static IFeedCodec Codec(FeedType feed) => feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? FeedCodecRegistry.Create(feed) : FeedCodecRegistry.Create(feed);
 
     /// <summary>
     /// Builds a message from a sample file.
@@ -346,7 +347,7 @@ internal static class DetectingProtectorChecks
     private static ParsedFeed ParseEdited(string path, FeedType feed, Action<IReadOnlyList<FeedField>, byte[]> edit)
     {
         var message = Message(path, feed);
-        var codec = new GenericXdrFeedCodec(feed);
+        var codec = FeedCodecRegistry.Create(feed);
         var parsed = codec.Parse(message);
         var envelope = FeedPayloadReader.Read(message);
         byte[] payload = envelope.Payload.ToArray();

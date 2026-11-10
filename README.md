@@ -9,11 +9,13 @@ The solution separates feed processing from messaging. Broker-specific code live
 ```text
 PresidioDemo.slnx
 ├── src/
-│   ├── PresidioDemo.Core/              Feeds, generic decoders, detection, pipeline (no broker code)
+│   ├── PresidioDemo.Core/              feeds, decoders and parsers, detection, pipeline (no broker code)
 │   │   ├── Configuration/recognizers/  aci.xml, etkt.xml, pnr.xml, pnr-linking.xml, seats.xml
-│   │   ├── FeedCodecs/ Models/ Parser/ Serializer/ Logging/   Shared/ plus the JSON feed folders
-│   │   ├── Protection/                 recognizer configuration, detecting protector, python/presidio_demo.py
-│   │   └── Pipeline/                   workflows, codec registry, FeedMessageProcessor
+│   │   ├── FeedCodecs/                 XdrFeedDecoder + AciDecoder, EtktDecoder, PnrDecoder; JsonFeedParser + PnrLinkingParser, SeatsParser; XdrTextScanner
+│   │   ├── Logging/                    FeedLogger + one logger per feed, FeedTransactionLog, DetectionLog
+│   │   ├── Models/                     FeedContracts, FeedFormats, FeedFileRouting
+│   │   ├── Pipeline/                   ProtectedFeedWorkflow + one workflow per feed, FeedWorkflowRouter, codec registry, FeedMessageProcessor
+│   │   └── Protection/                 recognizer configuration, detecting protector, python/presidio_demo.py
 │   ├── PresidioDemo.Messaging/         broker-neutral ports and models (no broker package)
 │   │   ├── Abstractions/               IMessagingConnection, IMessageConsumer, IMessagePublisher
 │   │   └── Models/                     InboundMessage, OutboundMessage, MessagingOptions, MessageRoute
@@ -31,8 +33,8 @@ PresidioDemo.slnx
 │   ├── Messaging.ContractTests/        the behaviour every broker adapter must pass
 │   ├── WorkerChecks/                   environments, settings validation, delivery rules (no Python)
 │   ├── FeedPipelineHarness/            runs files through the real workers and Presidio
-│   ├── FeedPipelineChecks/ FeedRoundTripChecks/ JsonFeeds/ GenericCodecChecks/   feed and codec checks
-│   ├── DetectionSpike/                 parity spike, recognizer checks, detection-log run
+│   ├── FeedPipelineChecks/ FeedRoundTripChecks/ JsonFeedChecks/ GenericCodecChecks/   feed and codec checks
+│   ├── DetectionParityChecks/          parity gate, recognizer checks, detection-log run, throughput
 │   ├── fixtures/                       value-free parity baseline, approved exceptions, spike summary
 │   └── unit-tests/                     Python tests, driven through the harness
 ├── tools/FeedSampleSender/             sends sample files to a running worker's input queues
@@ -43,7 +45,7 @@ PresidioDemo.slnx
     └── .env.dev.example                Dev values to copy into the git-ignored deploy/.env.dev
 ```
 
-Project references point inward only: Worker → Core, Messaging and the adapters; adapters → Messaging. Core never references messaging, and Messaging never references a broker. Feed-code namespaces are unchanged (`PresidioDemo.Feeds.*`, `PresidioDemo.Pipeline`, `PresidioDemo.Protection`); new code uses `PresidioDemo.Messaging`, `PresidioDemo.Messaging.Solace` and `PresidioDemo.Worker`. The Python environment stays at `src/.venv`; the container image uses `/opt/venv` through `Presidio:PythonEnvironment`.
+Project references point inward only: Worker → Core, Messaging and the adapters; adapters → Messaging. Core never references messaging, and Messaging never references a broker. Concern folders are flat: each holds a base class and one sealed child per feed where a feed needs one, and every namespace is the project plus its folder (for example `PresidioDemo.Core.FeedCodecs`, `PresidioDemo.Messaging.Solace.Connection`, `PresidioDemo.Worker.Hosting`); `test_project_layout.py` checks both. The Python environment stays at `src/.venv`; the container image uses `/opt/venv` through `Presidio:PythonEnvironment`.
 
 ![Feed protection workflow](docs/diagrams/presidio-feed-workflow.svg)
 
@@ -131,7 +133,7 @@ The root [.editorconfig](.editorconfig) shares C# formatting preferences with Vi
 
 Every feed is decoded generically; there is no per-feed schema or field list, so a template change does not stop protection.
 
-- **Binary feeds (ACI, ETKT, PNR).** `GenericXdrFeedCodec` reads the IBM MQ export or raw payload and `XdrTextScanner` scans the big-endian XDR words for counted strings of four or more printable ASCII characters. Shorter spans stay raw words and are never changed, because words such as `00000001 31000000` cannot be told apart from a one-character string (WR-015). A counted string whose text is not printable ASCII but is mostly letters, digits or spaces (Latin-1, EBCDIC, or text with a control character) cannot be checked, so the message is dead-lettered. Integers, framing and padding are never decoded or changed. Protected values are written back at the same width, and validation rejects any change outside the scanned strings.
+- **Binary feeds (ACI, ETKT, PNR).** `AciDecoder`, `EtktDecoder` and `PnrDecoder` (all `XdrFeedDecoder`) read the IBM MQ export or raw payload and `XdrTextScanner` scans the big-endian XDR words for counted strings of four or more printable ASCII characters. Shorter spans stay raw words and are never changed, because words such as `00000001 31000000` cannot be told apart from a one-character string (WR-015). A counted string whose text is not printable ASCII but is mostly letters, digits or spaces (Latin-1, EBCDIC, or text with a control character) cannot be checked, so the message is dead-lettered. Integers, framing and padding are never decoded or changed. Protected values are written back at the same width, and validation rejects any change outside the scanned strings.
 - **JSON feeds (PNR-Linking, Seats).** Every string value is a candidate, with its property name as context. Numbers, booleans and nulls never change; a number or boolean under a personal-data key dead-letters the message, because it cannot be protected in its type.
 
 Each feed has one recognizer file in [src/PresidioDemo.Core/Configuration/recognizers](src/PresidioDemo.Core/Configuration/recognizers). For every decoded string, in this order:
@@ -161,7 +163,7 @@ Patterns use syntax shared by .NET and the Python `regex` module and match case-
 ### Changing a format
 
 1. Edit the feed's file in `Configuration/recognizers/`. The loader rejects a bad pattern, a duplicate name, a missing anchor or an unknown element at startup. Each anchor, format and keep has a one-line `Example:` comment with fictional values (such as `MILLER/JORDAN` or `DA12345678`); add one for a new entry, never with real data.
-2. Check parity: `src/.venv/Scripts/python.exe tests/run_sample_verification.py`. Every value in [tests/fixtures/parity-baseline.json](tests/fixtures/parity-baseline.json) must stay protected or be listed in [parity-exceptions.json](tests/fixtures/parity-exceptions.json), and every PNR must stay unchanged (WR-019). A string the baseline protects nothing inside may be masked only if it is listed in [false-positives.json](tests/fixtures/false-positives.json); any other masked string fails the check. All three files are value-free: sample, location, length, and an entity or a reason. The baseline was frozen from the field policies this design replaced and cannot be regenerated. Every baseline entity type must keep a format or built-in in its feed's file (`DetectionSpike -- config-checks`).
+2. Check parity: `src/.venv/Scripts/python.exe tests/run_sample_verification.py`. Every value in [tests/fixtures/parity-baseline.json](tests/fixtures/parity-baseline.json) must stay protected or be listed in [parity-exceptions.json](tests/fixtures/parity-exceptions.json), and every PNR must stay unchanged (WR-019). A string the baseline protects nothing inside may be masked only if it is listed in [false-positives.json](tests/fixtures/false-positives.json); any other masked string fails the check. All three files are value-free: sample, location, length, and an entity or a reason. The baseline was frozen from the field policies this design replaced and cannot be regenerated. Every baseline entity type must keep a format or built-in in its feed's file (`DetectionParityChecks -- config-checks`).
 3. Open a pull request. The recognizer files ship only inside the image built from it (PR-005), so a change reaches an environment by deploying that image. While decoded-text detection is a POC, that image is deployed to Dev only ([deployment plan](docs/aws-deployment-plan.md)).
 
 ### Detection log
@@ -382,8 +384,8 @@ These logs contain original personal data and are written only under `.test-runs
 | `dotnet run --project tests/Messaging.ContractTests` | The broker contract, on the in-memory broker; also on Solace when `SOLACE_CONTRACT_TESTS=1` and the local broker runs | nothing (Solace: local broker) |
 | `dotnet run --project tests/FeedPipelineChecks` | Detection with real Presidio on every sample, PNR anchors, fail-closed cases, parity regression, per-feed scheduling and dead-lettering through `FeedWorker` | Python venv |
 | `dotnet run --project tests/FeedRoundTripChecks` | Byte-exact round trips without anonymization for every feed | nothing |
-| `dotnet run --project tests/JsonFeeds`, `dotnet run --project tests/GenericCodecChecks` | The JSON codec; the generic XDR scanner and codec on all binary samples | nothing |
-| `dotnet run --project tests/DetectionSpike -- config-checks` / `-- spike` | Recognizer file validation; parity, PNRs, rebuilds, false positives and throughput against the frozen baseline | nothing / Python venv |
+| `dotnet run --project tests/JsonFeedChecks`, `dotnet run --project tests/GenericCodecChecks` | The JSON codec; the generic XDR scanner and codec on all binary samples | nothing |
+| `dotnet run --project tests/DetectionParityChecks -- config-checks` / `-- spike` | Recognizer file validation; parity, PNRs, rebuilds, false positives and throughput against the frozen baseline | nothing / Python venv |
 | `src/.venv/Scripts/python.exe -m unittest discover -s tests/unit-tests -p test_*.py` | All feeds through the harness against the baseline, template changes, recognizer patterns, the detection bridge and the value-free detection log | built solution, Python venv |
 | `src/.venv/Scripts/python.exe tests/run_sample_verification.py` | All samples end to end, including the negative samples | built solution, Python venv |
 

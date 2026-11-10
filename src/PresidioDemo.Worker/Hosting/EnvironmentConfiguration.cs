@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace PresidioDemo.Worker;
+namespace PresidioDemo.Worker.Hosting;
 
 /// <summary>
 /// Builds configuration from the single appsettings.json: shared settings, then the selected environment's

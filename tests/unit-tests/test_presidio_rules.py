@@ -5,11 +5,11 @@ import subprocess
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "PresidioDemo.Core" / "Protection" / "Shared" / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "PresidioDemo.Core" / "Protection" / "python"))
 import presidio_demo
 
 
-SPIKE = Path(__file__).resolve().parents[2] / "tests" / "DetectionSpike" / "bin" / "Debug" / "net10.0" / "DetectionSpike.dll"
+SPIKE = Path(__file__).resolve().parents[2] / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
 
 
 def spans(feed, *texts):
@@ -25,7 +25,7 @@ class DetectionBridgeTests(unittest.TestCase):
     def setUpClass(cls):
         run = subprocess.run(["dotnet", str(SPIKE), "bridge-json"], capture_output=True, text=True, timeout=300)
         if run.returncode != 0:
-            raise AssertionError("Build tests/DetectionSpike first: " + run.stdout + run.stderr)
+            raise AssertionError("Build tests/DetectionParityChecks first: " + run.stdout + run.stderr)
         cls.feeds = [presidio_demo.configure_feed(line) for line in run.stdout.splitlines() if line.strip()]
         presidio_demo.configure_feed(json.dumps({"feed": "OnlyA", "builtIns": [],
             "formats": [{"name": "demoCode", "entity": "DEMO_CODE", "score": 0.9, "patterns": [r"DEMO-\d{4}"], "context": []}]}))

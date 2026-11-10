@@ -2,12 +2,13 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Messaging;
-using PresidioDemo.Messaging.Solace;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Messaging.Models;
+using PresidioDemo.Messaging.Solace.Connection;
 using PresidioDemo.Messaging.Testing;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Worker;
+using PresidioDemo.Worker.Hosting;
+using PresidioDemo.Worker.Pipeline;
 
 #region Execution
 

@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace PresidioDemo.Worker;
+namespace PresidioDemo.Worker.Hosting;
 
 /// <summary>
 /// The protection configuration files, bound from the Presidio section; relative paths resolve against the application folder.

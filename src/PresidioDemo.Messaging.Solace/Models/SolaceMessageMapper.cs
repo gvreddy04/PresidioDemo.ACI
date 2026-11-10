@@ -1,7 +1,8 @@
+using PresidioDemo.Messaging.Models;
 using SolaceSystems.Solclient.Messaging;
 using SolaceSystems.Solclient.Messaging.SDT;
 
-namespace PresidioDemo.Messaging.Solace;
+namespace PresidioDemo.Messaging.Solace.Models;
 
 /// <summary>
 /// Converts between native Solace messages and the broker-neutral message records.

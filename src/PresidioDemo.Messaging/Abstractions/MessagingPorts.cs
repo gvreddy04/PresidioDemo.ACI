@@ -1,4 +1,6 @@
-namespace PresidioDemo.Messaging;
+using PresidioDemo.Messaging.Models;
+
+namespace PresidioDemo.Messaging.Abstractions;
 
 #region Interfaces
 

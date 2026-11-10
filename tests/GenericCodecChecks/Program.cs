@@ -1,5 +1,7 @@
 using System.Text.Json;
-using PresidioDemo.Feeds.Shared;
+using PresidioDemo.Core.FeedCodecs;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
 
 #region Execution
 
@@ -34,9 +36,9 @@ foreach (var (path, feed) in samples)
 {
     string name = Path.GetFileName(path);
     var message = new FeedMessage(new FeedDelivery(feed, Guid.NewGuid(), name, path), File.ReadAllBytes(path));
-    var codec = new GenericXdrFeedCodec(feed);
+    var codec = FeedCodecRegistry.Create(feed);
     var parsed = codec.Parse(message);
-    var candidates = GenericXdrFeedCodec.Candidates(parsed);
+    var candidates = XdrFeedDecoder.Candidates(parsed);
 
     // A-002: the scanner still finds the strings the removed schemas held, and every baseline value of four or more
     // characters lies inside one candidate (shorter ones are raw words, WR-015).

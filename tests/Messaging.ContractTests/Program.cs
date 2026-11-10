@@ -1,7 +1,11 @@
 using System.Text;
 using Microsoft.Extensions.Logging;
-using PresidioDemo.Messaging;
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
 using PresidioDemo.Messaging.Solace;
+using PresidioDemo.Messaging.Solace.Connection;
+using PresidioDemo.Messaging.Solace.Listener;
+using PresidioDemo.Messaging.Solace.Publisher;
 using PresidioDemo.Messaging.Testing;
 
 #region Execution

@@ -1,12 +1,12 @@
 using System.Buffers.Binary;
 using System.Text;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Pipeline;
 using Microsoft.Extensions.Logging.Abstractions;
-using PresidioDemo.Messaging;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Core.Protection;
+using PresidioDemo.Messaging.Models;
 using PresidioDemo.Messaging.Testing;
-using PresidioDemo.Protection;
-using PresidioDemo.Worker;
+using PresidioDemo.Worker.Pipeline;
 
 #region Execution
 

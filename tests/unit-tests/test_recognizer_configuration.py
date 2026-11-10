@@ -9,7 +9,7 @@ import regex
 
 PROJECT = Path(__file__).resolve().parents[2]
 RECOGNIZERS = PROJECT / "src" / "PresidioDemo.Core" / "Configuration" / "recognizers"
-SPIKE = PROJECT / "tests" / "DetectionSpike" / "bin" / "Debug" / "net10.0" / "DetectionSpike.dll"
+SPIKE = PROJECT / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
 FILES = ["aci.xml", "etkt.xml", "pnr.xml", "pnr-linking.xml", "seats.xml"]
 # Presidio's PatternRecognizer compiles with these flags.
 FLAGS = regex.DOTALL | regex.MULTILINE | regex.IGNORECASE
@@ -40,7 +40,7 @@ def patterns():
 
 class RecognizerConfigurationTests(unittest.TestCase):
     def test_loader_accepts_the_files_and_rejects_invalid_ones(self):
-        self.assertTrue(SPIKE.is_file(), "Build tests/DetectionSpike first")
+        self.assertTrue(SPIKE.is_file(), "Build tests/DetectionParityChecks first")
         run = subprocess.run(["dotnet", str(SPIKE), "config-checks"], capture_output=True, text=True, timeout=300)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn("recognizer configuration checks", run.stdout)

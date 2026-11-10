@@ -8,7 +8,7 @@ import unittest
 
 from pipeline_harness import PROJECT, run
 
-SPIKE = PROJECT / "tests" / "DetectionSpike" / "bin" / "Debug" / "net10.0" / "DetectionSpike.dll"
+SPIKE = PROJECT / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
 DETECT = re.compile(r"^(\S+) [0-9a-f]{32} DETECT slot=(\d+) key=(\S+) len=(\d+) shape=(.*) format=(\S+) entity=(\S+) "
                     r"score=(\d\.\d\d) decision=(masked|replaced|kept|masked-inside|anchor|masked-by-default|missed-below-threshold)$")
 
@@ -65,7 +65,7 @@ def leaked_values(text):
 def detection_log(state):
     run_ = subprocess.run(["dotnet", str(SPIKE), "detection-log", state], capture_output=True, text=True, timeout=900)
     if run_.returncode != 0:
-        raise AssertionError("Build tests/DetectionSpike first: " + run_.stdout + run_.stderr)
+        raise AssertionError("Build tests/DetectionParityChecks first: " + run_.stdout + run_.stderr)
     return run_.stdout
 
 

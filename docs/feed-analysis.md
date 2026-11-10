@@ -8,13 +8,13 @@ The application retains the three original XML formats: reference mappings, feed
 
 ## PNR-Linking and Seats: shared System.Text.Json processing
 
-The standard routes select `PNRLinking/PnrLinkingFeedCodec` and `Seats/SeatsFeedCodec`, retaining one codec in each feed folder. These classes own the route and required JSON root and inherit `JsonFeedCodec`. The shared class uses `System.Text.Json.Utf8JsonReader` and `JsonSerializer` for both feeds. There are no separate JSON decoder, encoder, parser, serializer, model, structure-definition or report-formatter files. Four former shared helper files are also folded into the class, removing 18 redundant source files from the active project.
+The standard routes select `PnrLinkingParser` and `SeatsParser` in `src/PresidioDemo.Core/FeedCodecs`. Each sets its route and required JSON root and inherits `JsonFeedParser`. The shared class uses `System.Text.Json.Utf8JsonReader` and `JsonSerializer` for both feeds. There are no separate JSON decoder, encoder, serializer, model, structure-definition or report-formatter files.
 
 The PNR-Linking sample has 76 scalar occurrences across 49 configured policy paths. SEATS.txt has 59 occurrences across 39 paths and SEATS_03.txt has 51; the Seats policy has 68 paths, covering both samples and New-section mirrors of reviewed Old-section rules. The existing XML policies remain authoritative. JSON field names and nesting supply the structure, while instance paths locate values and wildcard paths select the rules. Every populated scalar still needs a configured rule. Array position never establishes passenger identity.
 
 Both routes retain original JSON bytes, scalar types and grouping, including empty arrays and objects. PNRs, passenger grouping, replacement settings, nulls and non-string values are unchanged. A protected output may differ only within changed string spans; MQ metadata and all other payload bytes are validated before publication. Comparing the byte gaps between scalars also detects changes to property names and empty containers. A parsed message from one feed cannot be serialized through the other feed's codec.
 
-`dotnet run --project tests/JsonFeeds` checks both routes against an independent `System.Text.Json.JsonDocument` reader, supplied messages, two-passenger fixtures, malformed JSON, route mismatches, missing fields, unsupported encodings, type changes, PNR changes and unreviewed paths. Reports are generated in the test project and include original payload values and field paths. Existing full-workflow round-trip checks also assert that both JSON feeds use the shared implementation. Earlier delivered source snapshots and samples are preserved.
+`dotnet run --project tests/JsonFeedChecks` checks both routes against an independent `System.Text.Json.JsonDocument` reader, supplied messages, two-passenger fixtures, malformed JSON, route mismatches, missing fields, unsupported encodings, type changes, PNR changes and unreviewed paths. Reports are generated in the test project and include original payload values and field paths. Existing full-workflow round-trip checks also assert that both JSON feeds use the shared implementation. Earlier delivered source snapshots and samples are preserved.
 
 ## Common binary representation
 
@@ -26,7 +26,7 @@ The initial ACI/PNR word is two; ETKT's is five. The schema checks these individ
 
 ## ACI: documented structures and a dedicated module
 
-The C-structure definitions were checked against all six supplied ACI payloads. The ACI module is split across the concern folders of `src/PresidioDemo.Core`: `Parser/ACI` (XDR reader, decoder, parser), `Serializer/ACI` (XDR writer, encoder, serializer), `Models/ACI` (models, source definitions, indicators), `Reporting/ACI` (readable reports) and `FeedCodecs/ACI` (route adapter). The standard application route selects `AciFeedCodec` when the reviewed schema-driven ACI configuration is loaded.
+The C-structure definitions were checked against all six supplied ACI payloads. The schema-driven ACI module these definitions describe was replaced by decoded-text detection (2026110501): ACI is now decoded by `src/PresidioDemo.Core/FeedCodecs/AciDecoder.cs` over `XdrFeedDecoder`, with no per-feed schema. The analysis is kept for reference.
 
 The decoder follows `seats_assigned` (ERROR=1 / DATA=2), flight/leg/compartment lists, passenger lists, passenger-flight items and nested seat, bag, registration, loyalty, profile, sequence, security, ticket, through-check-in, miscellaneous, history, consolidated-flight, codeshare, tier and transaction-time lists. Four-byte XDR scalar slots must not be confused with C memory sizes. Strings have length words and zero padding; null linked pointers have a zero presence word.
 
@@ -44,7 +44,7 @@ The immutable workspace review, decoded examples, searchable transcription, veri
 
 ## ETKT: a dedicated module and one 136-slot sample profile
 
-The ETKT module uses the same layout: `Parser/ETKT`, `Serializer/ETKT`, `Models/ETKT`, `Reporting/ETKT` and `FeedCodecs/ETKT` under `src/PresidioDemo.Core`. The supplied configuration selects this module with `etktStructures="true"`; custom reference entries without that setting keep their previous codec. The existing XML remains a reviewed protection projection. Every nonempty decoded string needs complete policy coverage, and unsupported populated shapes go to the dead-letter queue without publication.
+ETKT is likewise decoded by `src/PresidioDemo.Core/FeedCodecs/EtktDecoder.cs` over `XdrFeedDecoder`; the schema-driven module and its policy XML described here were removed with decoded-text detection (2026110501). The analysis is kept for reference.
 
 The six samples begin with `5, 1, 0`. The screenshot union defines error=1, issue=2 and update=3. The agreed implementation supports an explicitly observed type-5 profile while leaving its discriminator meaning unconfirmed. All 136 scalar slots align with the screenshot history order. The encoder rebuilds the entire payload, including empty string slots and four-byte character slots. A separate Python reader agrees on every value, type, offset and encoded width.
 

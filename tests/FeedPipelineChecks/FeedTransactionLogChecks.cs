@@ -1,6 +1,6 @@
 using System.Text;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Transport;
+using PresidioDemo.Core.Logging;
+using PresidioDemo.Core.Models;
 
 /// <summary>
 /// Verifies the complete before-and-after diagnostic log format written by the test harness.

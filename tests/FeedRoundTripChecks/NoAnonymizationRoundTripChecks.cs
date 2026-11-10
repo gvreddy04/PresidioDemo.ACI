@@ -1,8 +1,9 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Protection;
+using PresidioDemo.Core.FeedCodecs;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Core.Protection;
 
 /// <summary>
 /// Runs all-keep workflow cycles and records byte-exact verification evidence.
@@ -49,11 +50,11 @@ public static class NoAnonymizationRoundTripChecks
                 foreach (var example in examples)
                 {
                     var codec = Codec(example.Feed);
-                    if ((example.Feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR) && codec is not GenericXdrFeedCodec)
+                    if ((example.Feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR) && codec is not XdrFeedDecoder)
                     {
                         throw new Exception("Binary round trips must exercise the generic XDR codec.");
                     }
-                    if ((example.Feed is FeedType.PnrLinking or FeedType.Seats) && codec is not JsonFeedCodec)
+                    if ((example.Feed is FeedType.PnrLinking or FeedType.Seats) && codec is not JsonFeedParser)
                     {
                         throw new Exception("Default JSON round trips must exercise the shared System.Text.Json codec.");
                     }
