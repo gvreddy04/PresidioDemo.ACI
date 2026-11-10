@@ -40,7 +40,7 @@ Every supplied sample passes complete byte-exact decode/encode and original MQ-e
 
 The existing XML sequence is retained as a conservative policy projection for this sample family. Every nonempty decoded string must be completely covered by a reviewed field rule. Unreviewed shapes go to the dead-letter queue without publication. A synthetic two-passenger case verifies decoder identity links but is intentionally rejected by the current processing projection. No populated sample verifies some documented branches, including the unusual placement of `fcpr_list.next` before spare members. Updated producer XDR routines are still needed to establish wider production support.
 
-The immutable workspace review, decoded examples, searchable transcription, verification evidence are under `D:\Bala_Support\topics\aci\v2`.
+The immutable workspace review, decoded examples, searchable transcription, verification evidence are kept in the analyst's local workspace, outside this repository.
 
 ## ETKT: a dedicated module and one 136-slot sample profile
 
@@ -68,7 +68,7 @@ The other 43 documented strings (issue, exchange, refund, name adjustment, fligh
 
 The approved status report uses a provisional MSB-first convention, retains the original signed number and hex value, labels set documented flags, and exposes reserved set bits. `0x00002000` maps to Checked in, `0x00004000` to Divided ETKT, and `0x00010002` to Adjusted flight plus Re-accommodation. Exchange destination uses document bit 31 only when Exchanged is set. The `h_indicator` word follows the same convention from the source comments: bits 0–2 are the ID type (001 = ETKT), bit 3 is ETKT was in PNR in AAA, bit 7 is Actioned all subsequent coupons and bit 12 is Action for OA. The samples hold `0x20000000`, `0x34000000`, `0x34080000` and `0x31000000`; bit 5 is set in two of them and stays visible as unassigned. These are display interpretations, never serialization changes. ETKT_06's spare text says ADJUSTED while its status word maps to Checked in; the report retains both without assuming they describe the same event.
 
-The local review, searchable reference for all documented structures, history transcription and sample checks are retained under `D:\Bala_Support\topics\etkt\v4`; earlier versions remain immutable. The issue/reissue declarations remain documentary because there are no populated supplied examples and the source repeats `etkt_inds_2`. The active decoder supports the verified type-5 history sample family; it does not silently enable the other documented union arms.
+The local review, searchable reference for all documented structures, history transcription and sample checks are retained in the analyst's local workspace, outside this repository; earlier versions remain immutable. The issue/reissue declarations remain documentary because there are no populated supplied examples and the source repeats `etkt_inds_2`. The active decoder supports the verified type-5 history sample family; it does not silently enable the other documented union arms.
 
 Every ETKT example fits the same 67 raw words and 69 counted-string slots. Sixteen flight-information strings are empty in most examples and populated in ETKT_03. The two divide-event PNR strings are empty except in ETKT_05.
 

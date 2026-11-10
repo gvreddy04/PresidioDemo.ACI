@@ -4,12 +4,12 @@ How to build the worker image and run it with Docker Desktop: Part A uses a loca
 
 ## Where to run the commands
 
-Run every command in **PowerShell**, from the **project root**: the folder that contains `PresidioDemo.slnx`, `Dockerfile` and the `deploy` folder. On the development machine this is `D:\Bala_Support\Projects\PresidioDemo`; use your own clone's path if it differs.
+Run every command in **PowerShell**, from the **project root**: the folder that contains `PresidioDemo.slnx`, `Dockerfile` and the `deploy` folder. On the development machine this is `D:\Code\PresidioDemo`; use your own clone's path if it differs.
 
 Every new PowerShell window starts somewhere else, so begin each one with:
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 ```
 
 Check that you are in the right folder; this prints `True`:
@@ -36,7 +36,7 @@ Run these checks in PowerShell from the project root.
 **Run in:** project root. The trailing `.` tells Docker to use the project root as the build context, where the `Dockerfile` is.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 docker build -t presidio-worker:dev .
 ```
 
@@ -52,7 +52,7 @@ docker images presidio-worker
 
 ### Step 2: Set the broker admin password
 
-**File:** `deploy\.env` under the project root, for example `D:\Bala_Support\Projects\PresidioDemo\deploy\.env`. It is git-ignored. Create it once, if it does not exist, with a password of your choice:
+**File:** `deploy\.env` under the project root, for example `D:\Code\PresidioDemo\deploy\.env`. It is git-ignored. Create it once, if it does not exist, with a password of your choice:
 
 ```text
 SOLACE_ADMIN_PASSWORD=<choose one>
@@ -63,7 +63,7 @@ SOLACE_ADMIN_PASSWORD=<choose one>
 **Run in:** project root.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 docker compose -f deploy/docker-compose.yml --profile worker up -d
 ```
 
@@ -94,7 +94,7 @@ Press Ctrl+C to stop following the log; the worker keeps running.
 **Run in:** project root, in a **second** PowerShell window. The sender reads `docs/sample-docs` and `src/PresidioDemo.Worker/appsettings.json` from the project. The local broker accepts any password.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 $env:SOLACE_PASSWORD = "local-only"
 dotnet run --project tools/FeedSampleSender
 ```
@@ -116,7 +116,7 @@ Expect 18 `PUBLISHED` and 2 `DEAD-LETTERED` lines. The dead-lettered files are `
 **Run in:** project root. The worker holds about 1.5 GB of memory, so do not leave it running.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 
 # Stop both containers and keep the broker's queues
 docker compose -f deploy/docker-compose.yml --profile worker stop
@@ -132,7 +132,7 @@ docker compose -f deploy/docker-compose.yml --profile worker down
 **Run in:** project root. This creates `deploy\.env.dev` from the committed template.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 Copy-Item deploy/.env.dev.example deploy/.env.dev
 notepad deploy/.env.dev
 ```
@@ -154,7 +154,7 @@ The Dev queues must already exist, because the worker does not create queues out
 **Run in:** project root. Replace the source path with where you saved the certificate.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 New-Item -ItemType Directory -Force deploy/certs | Out-Null
 Copy-Item <path-to-the-broker-ca.pem> deploy/certs/
 ```
@@ -164,7 +164,7 @@ Copy-Item <path-to-the-broker-ca.pem> deploy/certs/
 **Run in:** project root.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 docker compose -f deploy/docker-compose.dev.yml up -d
 docker compose -f deploy/docker-compose.dev.yml logs -f worker
 ```
@@ -176,7 +176,7 @@ Wait for `READY: 3 feed workers on Solace.`. The log also reports that PNR-Linki
 **Run in:** project root, in a **new** PowerShell window, so the Dev values do not stay in a window you use for other work. These commands load `deploy\.env.dev` into this window only, then run the sender, which skips feeds that Dev does not route.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 Get-Content deploy/.env.dev | Where-Object { $_ -match '^[A-Za-z_]+=' } | ForEach-Object { $name, $value = $_ -split '=', 2; Set-Item "env:$name" $value }
 $env:DOTNET_ENVIRONMENT = "Dev"
 $env:Solace__TrustStoreFolder = "$PWD\deploy\certs"
@@ -190,7 +190,7 @@ Close this window when you are done, so the password does not stay in memory.
 **Run in:** project root.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 docker compose -f deploy/docker-compose.dev.yml down
 ```
 
@@ -205,7 +205,7 @@ It builds the image for `linux/amd64`, tags it with the current commit and pushe
 **Run in:** project root.
 
 ```powershell
-Set-Location D:\Bala_Support\Projects\PresidioDemo
+Set-Location D:\Code\PresidioDemo
 
 # Allow local scripts in this window only, if PowerShell blocks them
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
@@ -227,7 +227,7 @@ The script prints the pushed digest. Reference the digest or the commit tag in t
 
 | What you see | Cause and fix |
 |---|---|
-| `compose file "...\deploy\docker-compose.yml" is invalid: open ...: The system cannot find the path specified` or `failed to read dockerfile: open Dockerfile: no such file or directory` | You are not in the project root. Run `Set-Location D:\Bala_Support\Projects\PresidioDemo` and repeat. |
+| `compose file "...\deploy\docker-compose.yml" is invalid: open ...: The system cannot find the path specified` or `failed to read dockerfile: open Dockerfile: no such file or directory` | You are not in the project root. Run `Set-Location D:\Code\PresidioDemo` and repeat. |
 | `publish-image.ps1 cannot be loaded because running scripts is disabled` | Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned` in that window, then repeat. |
 | `Worker could not start: Solace password environment variable SOLACE_PASSWORD is not set` | `SOLACE_PASSWORD` is missing from `deploy\.env.dev`, or from the window that runs the sender. |
 | `host name could not be resolved` | Docker cannot reach the Dev host. Check `Solace__Host`, and that the VPN and DNS work from Docker Desktop. |
