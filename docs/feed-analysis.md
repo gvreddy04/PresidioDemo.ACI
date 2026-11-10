@@ -8,7 +8,7 @@ The application retains the three original XML formats: reference mappings, feed
 
 ## PNR-Linking and Seats: shared System.Text.Json processing
 
-The standard routes select `PnrLinkingParser` and `SeatsParser` in `src/PresidioDemo.Core/FeedCodecs`. Each sets its route and required JSON root and inherits `JsonFeedParser`. The shared class uses `System.Text.Json.Utf8JsonReader` and `JsonSerializer` for both feeds. There are no separate JSON decoder, encoder, serializer, model, structure-definition or report-formatter files.
+The standard routes select `PnrLinkingParser` and `SeatsParser` in `src/PresidioDemo.Core/Decoder`. Each sets its route and required JSON root and inherits `JsonFeedParser`. The shared class uses `System.Text.Json.Utf8JsonReader` and `JsonSerializer` for both feeds. There are no separate JSON decoder, encoder, serializer, model, structure-definition or report-formatter files.
 
 The PNR-Linking sample has 76 scalar occurrences across 49 configured policy paths. SEATS.txt has 59 occurrences across 39 paths and SEATS_03.txt has 51; the Seats policy has 68 paths, covering both samples and New-section mirrors of reviewed Old-section rules. The existing XML policies remain authoritative. JSON field names and nesting supply the structure, while instance paths locate values and wildcard paths select the rules. Every populated scalar still needs a configured rule. Array position never establishes passenger identity.
 
@@ -26,7 +26,7 @@ The initial ACI/PNR word is two; ETKT's is five. The schema checks these individ
 
 ## ACI: documented structures and a dedicated module
 
-The C-structure definitions were checked against all six supplied ACI payloads. The schema-driven ACI module these definitions describe was replaced by decoded-text detection (2026110501): ACI is now decoded by `src/PresidioDemo.Core/FeedCodecs/AciDecoder.cs` over `XdrFeedDecoder`, with no per-feed schema. The analysis is kept for reference.
+The C-structure definitions were checked against all six supplied ACI payloads. The schema-driven ACI module these definitions describe was replaced by decoded-text detection (2026110501): ACI is now decoded by `src/PresidioDemo.Core/Decoder/AciDecoder.cs` over `XdrFeedDecoder`, with no per-feed schema. The analysis is kept for reference.
 
 The decoder follows `seats_assigned` (ERROR=1 / DATA=2), flight/leg/compartment lists, passenger lists, passenger-flight items and nested seat, bag, registration, loyalty, profile, sequence, security, ticket, through-check-in, miscellaneous, history, consolidated-flight, codeshare, tier and transaction-time lists. Four-byte XDR scalar slots must not be confused with C memory sizes. Strings have length words and zero padding; null linked pointers have a zero presence word.
 
@@ -44,7 +44,7 @@ The immutable workspace review, decoded examples, searchable transcription, veri
 
 ## ETKT: a dedicated module and one 136-slot sample profile
 
-ETKT is likewise decoded by `src/PresidioDemo.Core/FeedCodecs/EtktDecoder.cs` over `XdrFeedDecoder`; the schema-driven module and its policy XML described here were removed with decoded-text detection (2026110501). The analysis is kept for reference.
+ETKT is likewise decoded by `src/PresidioDemo.Core/Decoder/EtktDecoder.cs` over `XdrFeedDecoder`; the schema-driven module and its policy XML described here were removed with decoded-text detection (2026110501). The analysis is kept for reference.
 
 The six samples begin with `5, 1, 0`. The screenshot union defines error=1, issue=2 and update=3. The agreed implementation supports an explicitly observed type-5 profile while leaving its discriminator meaning unconfirmed. All 136 scalar slots align with the screenshot history order. The encoder rebuilds the entire payload, including empty string slots and four-byte character slots. A separate Python reader agrees on every value, type, offset and encoded width.
 

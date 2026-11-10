@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using PresidioDemo.Core.FeedCodecs;
+using PresidioDemo.Core.Decoder;
 using PresidioDemo.Core.Models;
 
 namespace PresidioDemo.Core.Protection;

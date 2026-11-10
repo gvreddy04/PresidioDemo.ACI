@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text;
 using PresidioDemo.Core.Models;
 
-namespace PresidioDemo.Core.FeedCodecs;
+namespace PresidioDemo.Core.Decoder;
 
 /// <summary>
 /// The shared decoder for the binary XDR feeds, with no per-feed schema: every counted string of four or more printable characters becomes a

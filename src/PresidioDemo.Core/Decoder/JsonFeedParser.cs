@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using PresidioDemo.Core.Models;
 
-namespace PresidioDemo.Core.FeedCodecs;
+namespace PresidioDemo.Core.Decoder;
 
 /// <summary>
 /// Shared System.Text.Json processing for PNR-Linking and Seats, with exact unselected bytes.

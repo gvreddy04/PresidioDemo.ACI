@@ -1,6 +1,6 @@
 using System.Text;
 using System.Text.Json;
-using PresidioDemo.Core.FeedCodecs;
+using PresidioDemo.Core.Decoder;
 using PresidioDemo.Core.Models;
 using PresidioDemo.Core.Pipeline;
 

@@ -11,7 +11,7 @@ PresidioDemo.slnx
 ├── src/
 │   ├── PresidioDemo.Core/              feeds, decoders and parsers, detection, pipeline (no broker code)
 │   │   ├── Configuration/recognizers/  aci.xml, etkt.xml, pnr.xml, pnr-linking.xml, seats.xml
-│   │   ├── FeedCodecs/                 XdrFeedDecoder + AciDecoder, EtktDecoder, PnrDecoder; JsonFeedParser + PnrLinkingParser, SeatsParser; XdrTextScanner
+│   │   ├── Decoder/                    XdrFeedDecoder + AciDecoder, EtktDecoder, PnrDecoder; JsonFeedParser + PnrLinkingParser, SeatsParser; XdrTextScanner
 │   │   ├── Logging/                    FeedLogger + one logger per feed, FeedTransactionLog, DetectionLog
 │   │   ├── Models/                     FeedContracts, FeedFormats, FeedFileRouting
 │   │   ├── Pipeline/                   ProtectedFeedWorkflow + one workflow per feed, FeedWorkflowRouter, codec registry, FeedMessageProcessor
@@ -45,7 +45,7 @@ PresidioDemo.slnx
     └── .env.dev.example                Dev values to copy into the git-ignored deploy/.env.dev
 ```
 
-Project references point inward only: Worker → Core, Messaging and the adapters; adapters → Messaging. Core never references messaging, and Messaging never references a broker. Concern folders are flat: each holds a base class and one sealed child per feed where a feed needs one, and every namespace is the project plus its folder (for example `PresidioDemo.Core.FeedCodecs`, `PresidioDemo.Messaging.Solace.Connection`, `PresidioDemo.Worker.Hosting`); `test_project_layout.py` checks both. The Python environment stays at `src/.venv`; the container image uses `/opt/venv` through `Presidio:PythonEnvironment`.
+Project references point inward only: Worker → Core, Messaging and the adapters; adapters → Messaging. Core never references messaging, and Messaging never references a broker. Concern folders are flat: each holds a base class and one sealed child per feed where a feed needs one, and every namespace is the project plus its folder (for example `PresidioDemo.Core.Decoder`, `PresidioDemo.Messaging.Solace.Connection`, `PresidioDemo.Worker.Hosting`); `test_project_layout.py` checks both. The Python environment stays at `src/.venv`; the container image uses `/opt/venv` through `Presidio:PythonEnvironment`.
 
 ![Feed protection workflow](docs/diagrams/presidio-feed-workflow.svg)
 

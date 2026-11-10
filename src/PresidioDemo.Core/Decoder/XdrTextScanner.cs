@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 
-namespace PresidioDemo.Core.FeedCodecs;
+namespace PresidioDemo.Core.Decoder;
 
 #region Models
 

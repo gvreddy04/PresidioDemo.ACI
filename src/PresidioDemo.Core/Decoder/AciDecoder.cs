@@ -1,6 +1,6 @@
 using PresidioDemo.Core.Models;
 
-namespace PresidioDemo.Core.FeedCodecs;
+namespace PresidioDemo.Core.Decoder;
 
 /// <summary>
 /// Decodes, rebuilds and validates ACI messages; the shared logic is in <see cref="XdrFeedDecoder"/>.

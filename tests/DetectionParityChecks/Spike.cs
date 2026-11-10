@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using PresidioDemo.Core.FeedCodecs;
+using PresidioDemo.Core.Decoder;
 using PresidioDemo.Core.Logging;
 using PresidioDemo.Core.Models;
 using PresidioDemo.Core.Protection;

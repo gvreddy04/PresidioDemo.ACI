@@ -34,7 +34,7 @@ class ProjectLayoutTests(unittest.TestCase):
     def test_per_feed_parsers_and_policy_xml_are_removed(self):
         core = PROJECT / "src/PresidioDemo.Core"
         for feed in ("ACI", "ETKT", "PNR"):
-            for area in ("Parser", "Serializer", "FeedCodecs", "Models", "Reporting"):
+            for area in ("Parser", "Serializer", "Decoder", "Models", "Reporting"):
                 self.assertFalse((core / area / feed).exists(), f"{area}/{feed}")
         for name in ("feed-policies.xml", "xdr-layouts.xml", "reference-layouts.xml"):
             self.assertFalse((core / "Configuration" / name).exists(), name)
@@ -47,15 +47,15 @@ class ProjectLayoutTests(unittest.TestCase):
         # CR-002: one folder per concern holding a base and its per-feed children; no Parser, Serializer, feed or Shared folders.
         core = PROJECT / "src/PresidioDemo.Core"
         concerns = {p.name for p in core.iterdir() if p.is_dir() and p.name not in ("bin", "obj")}
-        self.assertEqual(concerns, {"Configuration", "FeedCodecs", "Logging", "Models", "Pipeline", "Protection"})
-        for concern in ("FeedCodecs", "Logging", "Models", "Pipeline"):
+        self.assertEqual(concerns, {"Configuration", "Decoder", "Logging", "Models", "Pipeline", "Protection"})
+        for concern in ("Decoder", "Logging", "Models", "Pipeline"):
             self.assertEqual([p.name for p in (core / concern).iterdir() if p.is_dir()], [], concern)
         self.assertEqual([p.name for p in (core / "Protection").iterdir() if p.is_dir()], ["python"])
 
     def test_each_feed_has_one_class_per_concern_over_its_base(self):
         core = PROJECT / "src/PresidioDemo.Core"
         expected = {
-            "FeedCodecs": {"AciDecoder": "XdrFeedDecoder(FeedType.ACI)", "EtktDecoder": "XdrFeedDecoder(FeedType.ETKT)",
+            "Decoder": {"AciDecoder": "XdrFeedDecoder(FeedType.ACI)", "EtktDecoder": "XdrFeedDecoder(FeedType.ETKT)",
                            "PnrDecoder": "XdrFeedDecoder(FeedType.PNR)", "PnrLinkingParser": "JsonFeedParser(FeedType.PnrLinking,",
                            "SeatsParser": "JsonFeedParser(FeedType.Seats,"},
             "Pipeline": {name + "Workflow": "ProtectedFeedWorkflow(protector, codec)" for name in ("Aci", "Etkt", "Pnr", "PnrLinking", "Seats")},
@@ -66,7 +66,7 @@ class ProjectLayoutTests(unittest.TestCase):
                 text = (core / concern / (name + ".cs")).read_text(encoding="utf-8")
                 self.assertIn(f"public sealed class {name}", text, name)
                 self.assertIn(base, text, name)
-        for base in ("FeedCodecs/XdrFeedDecoder.cs", "FeedCodecs/JsonFeedParser.cs", "Pipeline/ProtectedFeedWorkflow.cs", "Logging/FeedLogger.cs"):
+        for base in ("Decoder/XdrFeedDecoder.cs", "Decoder/JsonFeedParser.cs", "Pipeline/ProtectedFeedWorkflow.cs", "Logging/FeedLogger.cs"):
             self.assertIn("public abstract class", (core / base).read_text(encoding="utf-8"), base)
 
     def test_namespaces_follow_project_and_folder(self):
