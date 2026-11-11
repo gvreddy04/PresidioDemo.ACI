@@ -134,6 +134,44 @@ internal static class DetectingProtectorChecks
             && !Lines(jsonFree)[0].Contains("offsets=", StringComparison.Ordinal), "a value-free JSON entry shows undeclared names as ?");
         Check(jsonValued.Contains("    \"/0/con\\ntacts/j.miller@example.com\"  \"HOME\" -> \"####\"", StringComparison.Ordinal) && Lines(jsonValued).Length == Lines(jsonFree).Length,
             "a values JSON entry shows the full pointer, encoded so a key cannot break the line");
+        // Review R-009: one very long location must not pad every other line of the block to its width.
+        DetectionEvent[] wide =
+        [
+            new(0, "?", 4, "AAAA", "none", "", 0, DetectionDecision.MaskedByDefault, "/0/" + new string('k', 5000), "/0/?", "/*/" + new string('k', 5000)),
+            new(1, "PNROwner", 6, "AAA999", "anchor", "PNR", 1, DetectionDecision.Anchor, "/0/PNROwner", "/0/PNROwner", "/*/PNROwner"),
+        ];
+        var wideBlock = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PnrLinking, Guid.Empty, wide, before: ["HOME", "K7QX2M"], after: ["####", "K7QX2M"]);
+        Check(Lines(wideBlock).Single(line => line.Contains("PNROwner", StringComparison.Ordinal)).Length < 120,
+            "a long location is written unpadded instead of widening every line");
+        // Review R-010: zero-width and bidirectional formatting characters are escaped, and the value still reads back.
+        string disguised = "CALL " + (char)0x202E + "MILLER" + (char)0x200B + " HOME";
+        string encodedDisguise = PresidioDemo.Core.Logging.DetectionLog.Encode(disguised);
+        Check(!encodedDisguise.Contains((char)0x202E) && !encodedDisguise.Contains((char)0x200B) && encodedDisguise.Contains("\\u202E", StringComparison.Ordinal)
+            && System.Text.Json.JsonSerializer.Deserialize<string>(encodedDisguise) == disguised, "formatting characters are escaped and the value reads back");
+        Check(PresidioDemo.Core.Logging.DetectionLog.Encode("O'NEIL" + (char)0x2028 + "X") == "\"O'NEIL\\u2028X\"", "an apostrophe stays readable and a line separator is escaped");
+        // Review R-011: the worker writes each block with one Console.Out.Write. Console.Out is a synchronized writer, so
+        // blocks written from many threads at once (as by several consumers per task) must come out whole.
+        Check(Console.Out.GetType().Name == "SyncTextWriter", "the console writer the worker uses is synchronized");
+        var captured = new StringWriter();
+        var console = Console.Out;
+        Console.SetOut(TextWriter.Synchronized(captured));
+        try
+        {
+            Parallel.For(0, 400, new ParallelOptions { MaxDegreeOfParallelism = 16 }, i =>
+                Console.Out.Write(PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, new Guid(i, 0, 0, new byte[8]), events, before: fictionalBefore, after: fictionalAfter)));
+        }
+        finally
+        {
+            Console.SetOut(console);
+        }
+        var written = Lines(captured.ToString());
+        int perBlock = Lines(valued).Length;
+        // "PNR " plus the 32-digit transaction and a space: the rest of each header, and every body line, must match.
+        const int afterTransaction = 37;
+        Check(written.Length == 400 * perBlock && Enumerable.Range(0, 400).All(b =>
+            written[b * perBlock][afterTransaction..] == Lines(valued)[0][afterTransaction..]
+            && written.Skip(b * perBlock + 1).Take(perBlock - 1).SequenceEqual(Lines(valued).Skip(1))),
+            "400 blocks written from 16 threads at once each come out whole");
         Console.WriteLine("PASS the detection log writes one grouped block per message, with values only when passed (WR-018, WR-020)");
 
         // ACI: the PNR is found next to the passenger name whether it is string 9 or string 8 (W-019).

@@ -213,6 +213,7 @@ class DetectionLogValuesTests(unittest.TestCase):
     Assertion messages name samples and counts only, never a value."""
 
     NOTE = "LINE ONE\nSAY \"HI\" \\ X"  # fictional, with a newline, quotes and a backslash
+    ODD_KEY = "Odd\nKey"  # fictional property name with a newline, to show it cannot break a summary line
 
     @classmethod
     def setUpClass(cls):
@@ -220,6 +221,7 @@ class DetectionLogValuesTests(unittest.TestCase):
         inputs = {f"{p.parent.name}/{p.name}": p.read_bytes() for p in sorted(samples.rglob("*.txt"))}
         linking = json.loads(payload_of((samples / "PNR-Linking" / "PNR_LINKING.txt").read_bytes()))
         linking[0]["NewContactNote"] = cls.NOTE
+        linking[0][cls.ODD_KEY] = "MADE UP REMARK"
         inputs["PNR-Linking/values-note.bin"] = json.dumps(linking, separators=(",", ":")).encode("utf-8")
         cls.inputs = inputs
         cls.values = run(inputs, extra_args=["--detection-log", "values"], expect=2, prefix="detection-values-")
@@ -281,9 +283,10 @@ class DetectionLogValuesTests(unittest.TestCase):
             item = self.values.status(feed, name, "Rejected")
             self.assertNotIn(item["MessageId"], transactions, f"{feed}/{name} was rejected before detection but has a block")
 
-    def test_blocks_are_contiguous_while_five_feed_workers_write_at_once(self):
-        # Every block line is indented, so a line from another worker inside a block would end it early and the counts
-        # in its header would no longer match.
+    def test_every_block_in_the_harness_console_parses_whole(self):
+        # Every block line is indented, so any other line inside a block would end it early and its header counts would
+        # no longer match. Detection itself is serialized by the engine gate, so this run alone cannot show that
+        # concurrent writes are kept apart; FeedPipelineChecks writes blocks from many threads at once for that (R-011).
         for block in blocks(self.values.console):
             self.assertEqual(int(block["header"].group(4)), len(block["entries"]))
 
@@ -299,6 +302,9 @@ class DetectionLogValuesTests(unittest.TestCase):
         self.assertRegex(summary, r"(?m)^  /\*/NewContactNote +masked-by-default +seen=1 .*files=values-note\.bin$")
         self.assertNotIn(self.NOTE, summary)
         self.assertNotIn(json.dumps(self.NOTE), summary)
+        # Review R-008: a property name outside printable ASCII is JSON-encoded on its own line.
+        self.assertRegex(summary, r'(?m)^  "/\*/Odd\\nKey" +masked-by-default ')
+        self.assertFalse(any(line.startswith("Key") for line in summary.splitlines()), "a property name broke a summary line")
         # Feed headings name the feeds (a sample value such as "Seat" is part of "Seats"); only the entries are scanned.
         entries = "\n".join(line for line in summary.splitlines() if line.startswith("  ")).replace("/*/NewContactNote", "")
         self.assertEqual(leaked_values(entries), [], "values found in the summary")

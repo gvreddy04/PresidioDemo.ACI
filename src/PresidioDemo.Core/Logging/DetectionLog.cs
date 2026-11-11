@@ -59,6 +59,12 @@ public static class DetectionLog
     private const string GroupIndent = "  ";
 
     /// <summary>
+    /// The widest location the entries are aligned to; a longer location (such as a long encoded pointer under WR-020) is
+    /// written unpadded, so one long location cannot widen every line of the block.
+    /// </summary>
+    private const int MaximumPadding = 48;
+
+    /// <summary>
     /// Encodes values readably (an apostrophe stays an apostrophe) while still escaping quotes, backslashes and control
     /// characters, so an encoded value always stays on one line.
     /// </summary>
@@ -86,6 +92,28 @@ public static class DetectionLog
     };
 
     /// <summary>
+    /// Encodes a value, pointer, property name or reason as one JSON string. Beyond JSON's own escapes, the relaxed encoder
+    /// already escapes line and paragraph separators; zero-width and bidirectional formatting characters are escaped too, so
+    /// a value can neither break its line nor change how the rest of the line displays.
+    /// </summary>
+    /// <param name="value">The text.</param>
+    /// <returns>The quoted, escaped text, which decodes back to <paramref name="value"/>.</returns>
+    public static string Encode(string value)
+    {
+        string encoded = JsonSerializer.Serialize(value, ValueEncoding);
+        if (!encoded.Any(IsFormatting))
+        {
+            return encoded;
+        }
+        var escaped = new StringBuilder(encoded.Length + 16);
+        foreach (char c in encoded)
+        {
+            escaped.Append(IsFormatting(c) ? string.Create(CultureInfo.InvariantCulture, $"\\u{(int)c:X4}") : c.ToString());
+        }
+        return escaped.ToString();
+    }
+
+    /// <summary>
     /// Returns the detection log block for one message.
     /// </summary>
     /// <param name="feed">The feed route.</param>
@@ -101,7 +129,7 @@ public static class DetectionLog
         bool binary = feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR;
         var groups = Enumerable.Range(0, events.Count).ToLookup(i => Group(events[i].Decision));
         var locations = events.Select(e => Location(e, binary, before is not null)).ToArray();
-        int width = locations.Select(location => location.Length).DefaultIfEmpty(0).Max();
+        int width = Math.Min(locations.Select(location => location.Length).DefaultIfEmpty(0).Max(), MaximumPadding);
 
         var block = new StringBuilder();
         block.Append(CultureInfo.InvariantCulture,
@@ -162,11 +190,12 @@ public static class DetectionLog
     private static bool Changes(DetectionDecision decision) => Group(decision) == DetectionGroup.Pii || decision == DetectionDecision.MaskedByDefault;
 
     /// <summary>
-    /// Encodes a value, pointer or reason as one JSON string.
+    /// Returns whether a character is a zero-width or bidirectional formatting character (U+200B to U+200F, U+202A to
+    /// U+202E, U+2066 to U+2069), which would display invisibly or reorder the text after it.
     /// </summary>
-    /// <param name="value">The text.</param>
-    /// <returns>The quoted, escaped text.</returns>
-    private static string Encode(string value) => JsonSerializer.Serialize(value, ValueEncoding);
+    /// <param name="c">The character.</param>
+    /// <returns>True for those characters.</returns>
+    private static bool IsFormatting(char c) => c is >= (char)0x200B and <= (char)0x200F or >= (char)0x202A and <= (char)0x202E or >= (char)0x2066 and <= (char)0x2069;
 
     /// <summary>
     /// Returns where a string sits: <c>slot 12 @0x01A4</c> for a binary string; for JSON, the value-free pointer, or the

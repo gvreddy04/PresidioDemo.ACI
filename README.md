@@ -218,7 +218,7 @@ PNR-Linking 7c1e… DETECTION PUBLISHED strings=3 pii=1 non-pii=1 review=1
 - Outside Local, the feed's log group must keep entries for at most 7 days and be readable only by the PII team role while the flag is on, and the flag is switched only through a reviewed task-definition deploy (PR-006, [deployment plan](docs/aws-deployment-plan.md)).
 - The test harness runs the same modes with `--detection-log on` and `--detection-log values`.
 
-**Harness files.** Each before/after file in `logs/<feed>/` holds the block with values right after the payload hex dump, so a binary offset can be looked up there. Each run also writes `detection-summary.txt` beside `report.json` (WR-021): per feed, every review-group field across the run, by JSON path with array indexes as `*` (real property names, because the file stays local) or binary slot and offset, with its decision, character shapes, a count and the file names. It never holds a value.
+**Harness files.** Each before/after file in `logs/<feed>/` holds the block with values right after the payload hex dump, so a binary offset can be looked up there. Each run also writes `detection-summary.txt` beside `report.json` (WR-021): per feed, every review-group field across the run, by JSON path with array indexes as `*` (real property names, because the file stays local; in dynamic-key JSON a property name can itself be a value, and a name outside printable ASCII is JSON-encoded) or binary slot and offset, with its decision, character shapes, a count and the file names. It holds no string value.
 
 ### Results on the supplied samples
 
