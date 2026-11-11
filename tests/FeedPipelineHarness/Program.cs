@@ -89,24 +89,13 @@ try
     using var stop = new CancellationTokenSource();
     bool detectionLog = settings["--detection-log"] is "on" or "values";
     bool detectionLogValues = settings["--detection-log"] == "values";
+    // The workers write the detection blocks themselves, exactly as in a deployment: value-free with Presidio:DetectionLog
+    // on (WR-018), with values in "values" mode as with Presidio:DetectionLogValues on (WR-020).
     var workers = routes.Select(pair => new FeedWorker(pair.Key, pair.Value, messaging, broker, broker, processor, NullLogger.Instance, outcome =>
     {
         outcomes[outcome.Input.CorrelationId!] = outcome;
-        if (detectionLog && outcome.Result.DetectionEvents is { } events)
-        {
-            // The same lines the worker writes: value-free with Presidio:DetectionLog on (WR-018), with values in "values"
-            // mode as with Presidio:DetectionLogValues on (WR-020); published and dead-lettered-after-detection messages.
-            lock (outcomes)
-            {
-                foreach (string line in DetectionLog.Format(pair.Key, outcome.Result.Message.Delivery.MessageId, events,
-                    detectionLogValues ? outcome.Result.DetectionValues : null))
-                {
-                    Console.WriteLine(line);
-                }
-            }
-        }
         return ValueTask.CompletedTask;
-    }).RunAsync(stop.Token)).ToArray();
+    }, detectionLog, detectionLogValues).RunAsync(stop.Token)).ToArray();
     for (int i = 0; i < inputs.Count; i++)
     {
         var (path, feed, content) = inputs[i];
@@ -128,6 +117,7 @@ finally
 
 string output = settings["--output"];
 var items = new List<object>();
+var summary = new List<(FeedType Feed, string File, IReadOnlyList<DetectionEvent> Events)>();
 for (int i = 0; i < inputs.Count; i++)
 {
     var (path, feed, content) = inputs[i];
@@ -140,8 +130,17 @@ for (int i = 0; i < inputs.Count; i++)
         Console.WriteLine($"HARNESS {folder,-12} Pending   {name}");
         continue;
     }
+    // The before/after file is local and git-ignored, so its block carries values (WR-009).
+    string? detection = outcome.Result.DetectionEvents is { } events
+        ? DetectionLog.FormatBlock(feed, outcome.Result.Message.Delivery.MessageId, events, outcome.Result.Published ? null : outcome.Result.Reason,
+            outcome.Result.DetectionValues, outcome.Result.DetectionProtectedValues)
+        : null;
+    if (outcome.Result.DetectionEvents is { } reviewed)
+    {
+        summary.Add((feed, name, reviewed));
+    }
     string log = Write(Path.Combine(output, "logs", folder, name + ".log.txt"), System.Text.Encoding.UTF8.GetBytes(FeedLoggers.Format(
-        outcome.Result.Message with { Delivery = outcome.Result.Message.Delivery with { OriginalName = name } }, outcome.Result.Workflow, outcome.Result.Reason)));
+        outcome.Result.Message with { Delivery = outcome.Result.Message.Delivery with { OriginalName = name } }, outcome.Result.Workflow, outcome.Result.Reason, detection)));
     if (outcome.Result.Published)
     {
         string published = Write(Path.Combine(output, "published", folder, name), outcome.Published.Payload.ToArray());
@@ -157,12 +156,45 @@ for (int i = 0; i < inputs.Count; i++)
     }
 }
 string report = Write(Path.Combine(output, "report.json"), JsonSerializer.SerializeToUtf8Bytes(new { PublishAttempts = broker.PublishAttempts, Items = items }, new JsonSerializerOptions { WriteIndented = true }));
+Write(Path.Combine(output, "detection-summary.txt"), System.Text.Encoding.UTF8.GetBytes(Summary(inputs.Select(input => input.Feed).ToArray(), summary)));
 Console.WriteLine("Harness report: " + report);
 return items.All(item => item.GetType().GetProperty("Status")!.GetValue(item) as string == "Published") ? 0 : 2;
 
 #endregion
 
 #region Methods
+
+// Lists, per feed, every review-group field across the run (WR-021): a JSON field by its path with array indexes as *,
+// which keeps real property names because this file stays local; a binary field by slot and payload offset. It never
+// holds a value: only the decision, character shapes, a count and the file names.
+static string Summary(IReadOnlyList<FeedType> inputFeeds, IReadOnlyList<(FeedType Feed, string File, IReadOnlyList<DetectionEvent> Events)> detected)
+{
+    var text = new System.Text.StringBuilder();
+    text.AppendLine("Detection summary: review-group fields per feed (value-free; a format or keep may be needed)");
+    foreach (var feed in FeedCatalog.All.Select(f => f.Type).Where(inputFeeds.Contains))
+    {
+        text.AppendLine();
+        text.AppendLine($"{FeedCatalog.Get(feed).FolderName}  review fields ({inputFeeds.Count(f => f == feed)} files)");
+        var rows = detected.Where(d => d.Feed == feed)
+            .SelectMany(d => d.Events.Where(e => DetectionLog.Group(e.Decision) == DetectionGroup.Review).Select(e => (d.File, Event: e)))
+            .GroupBy(r => (Field: r.Event.Offset is int offset ? $"slot {r.Event.Slot} @0x{offset:X4}" : r.Event.Pattern, r.Event.Decision))
+            .OrderBy(g => g.Key.Field, StringComparer.Ordinal).ThenBy(g => g.Key.Decision)
+            .ToArray();
+        if (rows.Length == 0)
+        {
+            text.AppendLine("  (none)");
+            continue;
+        }
+        int width = rows.Max(g => g.Key.Field.Length);
+        foreach (var row in rows)
+        {
+            string shapes = string.Join(", ", row.Select(r => r.Event.Shape).Distinct(StringComparer.Ordinal).Take(3));
+            string files = string.Join(", ", row.Select(r => r.File).Distinct(StringComparer.Ordinal));
+            text.AppendLine($"  {row.Key.Field.PadRight(width)}  {DetectionLog.Decision(row.Key.Decision),-22}  seen={row.Count()}  shapes={shapes}  files={files}");
+        }
+    }
+    return text.ToString();
+}
 
 static string Write(string path, byte[] content)
 {

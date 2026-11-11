@@ -105,9 +105,12 @@ public sealed record FeedMessage(FeedDelivery Delivery, ReadOnlyMemory<byte> Con
 /// <param name="Events">One value-free detection event per decoded string, for the detection log (WR-018).</param>
 /// <param name="CandidateValues">The decoded value of each candidate, by event slot, for the detection log only when
 /// <c>Presidio:DetectionLogValues</c> is on (WR-020).</param>
+/// <param name="ProtectedCandidateValues">The published value of each candidate, by event slot, for the after values of
+/// the detection log under WR-020.</param>
 public sealed record FeedWorkflowResult(ReadOnlyMemory<byte> Content,
     IReadOnlyList<FeedField>? OriginalFields = null, IReadOnlyList<FeedField>? ProtectedFields = null,
-    IReadOnlyList<PresidioDemo.Core.Protection.DetectionEvent>? Events = null, IReadOnlyList<string>? CandidateValues = null);
+    IReadOnlyList<PresidioDemo.Core.Protection.DetectionEvent>? Events = null, IReadOnlyList<string>? CandidateValues = null,
+    IReadOnlyList<string>? ProtectedCandidateValues = null);
 
 #endregion
 

@@ -149,13 +149,13 @@ public sealed class FeedWorker(FeedType feed, MessageRoute route, MessagingOptio
             logger.LogWarning("{Feed} {Transaction} acknowledgment failed and will be redelivered: {Reason}", FeedCatalog.Get(feed).FolderName, id.ToString("N"), ex.Message);
         }
         LogSummary(id, input, result, outbound, timer.ElapsedMilliseconds);
-        // Published messages and messages dead-lettered after detection ran have events (WR-018, WR-020).
+        // Published messages and messages dead-lettered after detection ran have events (WR-018, WR-020). The single-line
+        // console logger would flatten the block, so it goes to standard output in one synchronized write, which also
+        // keeps another consumer's output from landing inside it.
         if (detectionLog && result.DetectionEvents is { } events)
         {
-            foreach (string line in DetectionLog.Format(feed, id, events, detectionLogValues ? result.DetectionValues : null))
-            {
-                logger.LogInformation("{DetectionLine}", line);
-            }
+            Console.Out.Write(DetectionLog.FormatBlock(feed, id, events, result.Published ? null : result.Reason,
+                detectionLogValues ? result.DetectionValues : null, detectionLogValues ? result.DetectionProtectedValues : null));
         }
         if (onOutcome is not null)
         {

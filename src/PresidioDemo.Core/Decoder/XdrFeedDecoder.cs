@@ -46,7 +46,7 @@ public abstract class XdrFeedDecoder(FeedType feed) : IFeedCodec
 
         var envelope = FeedPayloadReader.Read(message);
         var candidates = XdrTextScanner.Scan(envelope.Payload);
-        var fields = candidates.Select(c => new FeedField(SlotId(c.Slot), "slot" + c.Slot.ToString(CultureInfo.InvariantCulture), c.Value)).ToArray();
+        var fields = candidates.Select(c => new FeedField(SlotId(c.Slot), "slot" + c.Slot.ToString(CultureInfo.InvariantCulture), c.Value, c.Offset)).ToArray();
         return new ParsedFeed(fields, new Layout(message, envelope, candidates));
     }
 

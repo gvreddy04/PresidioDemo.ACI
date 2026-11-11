@@ -78,7 +78,7 @@ public static class DetectionRun
     }
 
     /// <summary>
-    /// Writes the detection log for every sample: value-free lines when on, nothing when off (V-05).
+    /// Writes the detection log for every sample: one value-free block per sample when on, nothing when off (V-05).
     /// </summary>
     /// <param name="root">The repository root.</param>
     /// <param name="enabled">Whether the detection log is on, as <c>Presidio:DetectionLog</c> would set it.</param>
@@ -93,10 +93,7 @@ public static class DetectionRun
             Console.WriteLine($"SAMPLE {name} candidates={result.Outcome?.Events.Count ?? 0} status={(result.Output is null ? "rejected" : "published")}");
             if (enabled && result.Outcome is not null)
             {
-                foreach (string line in DetectionLog.Format(result.Feed, Guid.Empty, result.Outcome.Events))
-                {
-                    Console.WriteLine(line);
-                }
+                Console.Write(DetectionLog.FormatBlock(result.Feed, Guid.Empty, result.Outcome.Events, result.Output is null ? result.Reason : null));
             }
         }
     }

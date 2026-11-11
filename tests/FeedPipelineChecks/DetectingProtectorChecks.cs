@@ -56,29 +56,85 @@ internal static class DetectingProtectorChecks
             var candidateValues = (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? parsed.Fields : JsonFeedParser.StringFields(parsed)).Select(f => f.Value);
             Check(outcome.CandidateValues is { } carried && carried.Count == outcome.Events.Count && carried.SequenceEqual(candidateValues),
                 Path.GetFileName(path) + ": the candidate values match the decoded strings by slot");
+            // WR-018: a binary string is located by its payload offset only; a JSON value-free pointer holds no value.
+            if (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR)
+            {
+                var payload = FeedPayloadReader.Read(message).Payload;
+                Check(outcome.Events.Zip(parsed.Fields).All(pair => pair.First.Offset is int at && pair.First.Pointer.Length == 0 && pair.First.SafePointer.Length == 0 &&
+                    Encoding.ASCII.GetString(payload.AsSpan(at, pair.Second.Value.Length)) == pair.Second.Value), Path.GetFileName(path) + ": each binary event's offset leads to its value");
+            }
+            else
+            {
+                // Array indexes are digits and may equal a short numeric string value; only property names are checked.
+                Check(outcome.Events.All(e => e.Offset is null && e.SafePointer.Split('/').All(segment => segment.All(char.IsAsciiDigit) || !decoded.Contains(segment))),
+                    Path.GetFileName(path) + ": no value-free JSON pointer carries a decoded value");
+            }
             published++;
         }
         Console.WriteLine($"PASS {published} production samples protected, rebuilt and validated with the recognizer sets");
 
-        // WR-020: values are appended only when passed, JSON-encoded on one line; every other field is unchanged.
+        // WR-018, WR-020: one block per message; every string in exactly one group; values only when passed, JSON-encoded.
         DetectionEvent[] events =
         [
-            new(0, "", 13, "AAAAAA/AAAAAA", "passengerName", "PERSON", 0.9, DetectionDecision.Masked),
-            new(1, "", 22, "AAAA AAA", "none", "", 0, DetectionDecision.MaskedByDefault),
+            new(0, "", 13, "AAAAAA/AAAAAA", "passengerName", "PERSON", 0.9, DetectionDecision.Masked, Offset: 0x01A4),
+            new(1, "", 6, "AAA999", "anchor", "PNR", 1, DetectionDecision.Anchor, Offset: 0x0018),
+            new(2, "", 22, "AAAA AAA", "none", "", 0, DetectionDecision.MaskedByDefault, Offset: 0x0200),
+            new(3, "", 6, "AA9999", "flightNumber", "", 0, DetectionDecision.Kept, Offset: 0x00E0),
+            new(4, "", 10, "AA99999999", "loyalty", "LOYALTY", 0.3, DetectionDecision.MissedBelowThreshold, Offset: 0x0288),
+            new(5, "", 7, "[AAAAA]", "dob", "DATE_OF_BIRTH", 1, DetectionDecision.Replaced, Offset: 0x02A0),
+            new(6, "", 12, "AAAA AAAAAAA", "remark", "PERSON", 0.85, DetectionDecision.MaskedInside, Offset: 0x02C0),
         ];
-        string[] fictional = ["MILLER/JORDAN", "LINE ONE\nSAY \"HI\" \\ X"];
-        var plain = PresidioDemo.Core.Logging.DetectionLog.Format(FeedType.PNR, Guid.Empty, events);
-        var withValues = PresidioDemo.Core.Logging.DetectionLog.Format(FeedType.PNR, Guid.Empty, events, fictional);
-        Check(plain.All(line => !line.Contains("value=", StringComparison.Ordinal)), "lines without values carry no value field");
-        Check(plain.Zip(withValues).All(pair => pair.Second.StartsWith(pair.First + " value=", StringComparison.Ordinal)),
-            "values lines keep every value-free field and add value= last");
-        Check(withValues.All(line => !line.Contains('\n') && !line.Contains('\r')), "an encoded value never breaks the line");
-        Check(withValues.Select((line, i) => System.Text.Json.JsonSerializer.Deserialize<string>(line[(line.IndexOf(" value=", StringComparison.Ordinal) + 7)..]) == fictional[i]).All(ok => ok),
-            "each encoded value reads back exactly");
-        // Review R-003: fewer values than events must not fail; a slot without a value keeps the value-free line.
-        var shortValues = PresidioDemo.Core.Logging.DetectionLog.Format(FeedType.PNR, Guid.Empty, events, ["MILLER/JORDAN"]);
-        Check(shortValues[0] == withValues[0] && shortValues[1] == plain[1], "a slot without a value keeps the value-free line");
-        Console.WriteLine("PASS the detection log appends JSON-encoded values only when they are passed (WR-020)");
+        string[] fictionalBefore = ["MILLER/JORDAN", "ABC123", "LINE ONE\nSAY \"HI\" \\ X", "XY1234", "XY99887766", "14MAR85", "CALL O'NEIL"];
+        string[] fictionalAfter = ["######/######", "ABC123", "######################", "XY1234", "XY99887766", "[DOB]", "CALL ######"];
+        string[] Lines(string block) => block.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        string Section(string block, string heading)
+        {
+            var lines = Lines(block);
+            int start = Array.FindIndex(lines, line => line == "  " + heading);
+            int end = Array.FindIndex(lines, start + 1, line => !line.StartsWith("    ", StringComparison.Ordinal));
+            return string.Join("\n", lines[(start + 1)..(end < 0 ? lines.Length : end)]);
+        }
+        var log = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events);
+        var valued = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, before: fictionalBefore, after: fictionalAfter);
+        Check(Lines(log)[0] == "PNR " + Guid.Empty.ToString("N") + " DETECTION PUBLISHED strings=7 pii=3 non-pii=2 review=2 offsets=payload",
+            "the header names the feed, transaction, outcome, counts and offset base");
+        Check(Lines(log).Skip(1).All(line => line.StartsWith(' ')) && Lines(valued).Skip(1).All(line => line.StartsWith(' ')),
+            "every line after the header is indented, so a collector keeps the block as one entry");
+        string pii = Section(log, "PII fields (changed)"), nonPii = Section(log, "Non-PII fields (unchanged)"), review = Section(log, "Review (a format or keep may be needed)");
+        Check(new[] { "@0x01A4", "@0x02A0", "@0x02C0" }.All(pii.Contains) && new[] { "@0x0018", "@0x00E0" }.All(nonPii.Contains)
+            && new[] { "@0x0200", "@0x0288" }.All(review.Contains), "each decision is listed in its group, located by slot and offset");
+        Check(Lines(log).Count(line => line.Contains(" @0x", StringComparison.Ordinal)) == events.Length, "each string appears exactly once");
+        Check(review.Contains("masked-by-default", StringComparison.Ordinal) && review.Split('\n').Single(line => line.Contains("@0x0200", StringComparison.Ordinal)).Contains("  changed  ", StringComparison.Ordinal)
+            && review.Split('\n').Single(line => line.Contains("@0x0288", StringComparison.Ordinal)).Contains("  unchanged  ", StringComparison.Ordinal),
+            "a review entry says whether the string changed");
+        Check(fictionalBefore.All(value => !log.Contains(value, StringComparison.Ordinal)) && fictionalAfter.Where(value => !value.All(c => c == '#')).All(value => !log.Contains(value, StringComparison.Ordinal))
+            && !log.Contains("->", StringComparison.Ordinal) && log.Contains("len=13 shape=AAAAAA/AAAAAA", StringComparison.Ordinal),
+            "a value-free block carries lengths and shapes, never a value");
+        Check(Lines(valued).Length == Lines(log).Length, "an encoded value never breaks a line");
+        Check(valued.Contains("\"MILLER/JORDAN\" -> \"######/######\"", StringComparison.Ordinal) && valued.Contains("\"CALL O'NEIL\" -> \"CALL ######\"", StringComparison.Ordinal)
+            && Section(valued, "Non-PII fields (unchanged)").Contains("\"ABC123\"  format=anchor", StringComparison.Ordinal),
+            "a changed string shows before -> after; an unchanged string shows its value once");
+        string encoded = Lines(valued).Single(line => line.Contains("@0x0200", StringComparison.Ordinal));
+        string quoted = encoded[(encoded.IndexOf('"', StringComparison.Ordinal))..encoded.IndexOf(" -> ", StringComparison.Ordinal)];
+        Check(System.Text.Json.JsonSerializer.Deserialize<string>(quoted) == fictionalBefore[2], "an encoded value reads back exactly");
+        var rejected = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, "Protection changed a PNR.", fictionalBefore, null);
+        Check(Lines(rejected)[0].EndsWith(" DETECTION DEAD-LETTERED strings=7 pii=3 non-pii=2 review=2 offsets=payload reason=\"Protection changed a PNR.\"", StringComparison.Ordinal)
+            && rejected.Contains("\"MILLER/JORDAN\" -> not published", StringComparison.Ordinal), "a dead-lettered block gives the reason and no after value");
+        var keptOnly = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, [events[3]]);
+        Check(Section(keptOnly, "PII fields (changed)") == "    (none)" && Section(keptOnly, "Review (a format or keep may be needed)") == "    (none)",
+            "an empty group is printed as (none)");
+        // Review R-003: fewer values than events must not fail; a slot without a value keeps the value-free form.
+        var shortValues = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, before: ["MILLER/JORDAN"], after: fictionalAfter);
+        Check(shortValues.Contains("\"MILLER/JORDAN\" -> \"######/######\"", StringComparison.Ordinal) && shortValues.Contains("len=6 shape=AAA999", StringComparison.Ordinal),
+            "a slot without a value keeps the value-free form");
+        DetectionEvent[] jsonEvents = [new(0, "?", 4, "AAAA", "none", "", 0, DetectionDecision.MaskedByDefault, "/0/con\ntacts/j.miller@example.com", "/0/?/?", "/*/con\ntacts/j.miller@example.com")];
+        var jsonFree = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PnrLinking, Guid.Empty, jsonEvents);
+        var jsonValued = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PnrLinking, Guid.Empty, jsonEvents, before: ["HOME"], after: ["####"]);
+        Check(jsonFree.Contains("    /0/?/?  len=4 shape=AAAA  changed", StringComparison.Ordinal) && !jsonFree.Contains("miller", StringComparison.Ordinal)
+            && !Lines(jsonFree)[0].Contains("offsets=", StringComparison.Ordinal), "a value-free JSON entry shows undeclared names as ?");
+        Check(jsonValued.Contains("    \"/0/con\\ntacts/j.miller@example.com\"  \"HOME\" -> \"####\"", StringComparison.Ordinal) && Lines(jsonValued).Length == Lines(jsonFree).Length,
+            "a values JSON entry shows the full pointer, encoded so a key cannot break the line");
+        Console.WriteLine("PASS the detection log writes one grouped block per message, with values only when passed (WR-018, WR-020)");
 
         // ACI: the PNR is found next to the passenger name whether it is string 9 or string 8 (W-019).
         foreach (string name in new[] { "ACI.txt", "ACI_05.txt" })
@@ -211,6 +267,10 @@ internal static class DetectingProtectorChecks
             "a name inside reason text is masked while the reason is kept");
         Check(Value("/PNROwner") == "K7QX2M", "the PNR stays unchanged");
         Check(jsonOutcome.Events.Single(e => e.Decision == DetectionDecision.MaskedByDefault).Key == "?", "an undeclared key is logged as ?");
+        var dynamicKey = jsonOutcome.Events.Single(e => e.Decision == DetectionDecision.MaskedByDefault);
+        Check(dynamicKey.SafePointer == "/0/?/?" && dynamicKey.Pointer == "/0/contacts/jordan.miller@example.com" && dynamicKey.Pattern == "/*/contacts/jordan.miller@example.com",
+            "a value-free pointer shows undeclared names as ? and keeps the array index; the full pointer keeps every name");
+        Check(jsonOutcome.Events.Single(e => e.Decision == DetectionDecision.Anchor).SafePointer == "/0/PNROwner", "a declared key keeps its name in the value-free pointer");
         await RejectAsync(() => protector.ProtectAsync(FeedType.PnrLinking, linkingCodec.Parse(new FeedMessage(new FeedDelivery(FeedType.PnrLinking, Guid.NewGuid(), "fixture.bin", ""),
             Encoding.UTF8.GetBytes("[{\"PNROwner\":\"K7QX2M\",\"DOB\":{\"Year\":1985}}]"))), CancellationToken.None),
             "number or boolean", "a number nested under a personal-data key dead-letters");

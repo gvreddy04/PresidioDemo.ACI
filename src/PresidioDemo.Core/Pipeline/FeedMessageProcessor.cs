@@ -34,6 +34,13 @@ public sealed record FeedProcessingResult(FeedMessage Message, FeedWorkflowResul
     public IReadOnlyList<DetectionEvent>? DetectionEvents => Workflow?.Events ?? RejectedEvents;
 
     /// <summary>
+    /// Gets the published value of each detected string for the detection log's after values (WR-020); null for a
+    /// rejected message, which publishes nothing.
+    /// </summary>
+    /// <value>The protected values by event slot, or null.</value>
+    public IReadOnlyList<string>? DetectionProtectedValues => Workflow?.ProtectedCandidateValues;
+
+    /// <summary>
     /// Gets a value indicating whether the message produced validated protected output.
     /// </summary>
     /// <value>Whether the output can be published.</value>

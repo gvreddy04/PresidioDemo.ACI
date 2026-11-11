@@ -5,7 +5,7 @@ import unittest
 
 from decoded_text_support import EXPECTED_REJECTIONS, PROJECT, baseline, json_value, payload, verify_published
 from pipeline_harness import run
-from test_feed_logs import leaked_values
+from test_feed_logs import blocks, leaked_values
 
 SAMPLES = PROJECT / "docs" / "sample-docs"
 
@@ -126,9 +126,9 @@ class DecodedTextFeedTests(unittest.TestCase):
         self.assertEqual({c["FirstName"] for c in linking[0]["Customers"] if c.get("FirstName")}, {"[PASSENGER_NAME]"})
 
     def test_detection_log_through_the_harness_is_value_free(self):
-        lines = [line.split(" DETECT ", 1)[1] for line in self.harness.console.splitlines() if " DETECT " in line]
-        self.assertGreater(len(lines), 400)
-        leaked = leaked_values("\n".join(lines))
+        found = blocks(self.harness.console)
+        self.assertGreater(sum(len(b["entries"]) for b in found), 400)
+        leaked = leaked_values("\n".join("\n".join(b["lines"][1:]) for b in found))
         self.assertEqual(leaked, [])
 
 

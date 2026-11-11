@@ -51,7 +51,7 @@ public abstract class ProtectedFeedWorkflow(IFeedProtector protector, IFeedCodec
         Console.WriteLine($"{FeedCatalog.Get(Feed).FolderName,-12} SERIALIZED Original format rebuilt and validated | {timer.ElapsedMilliseconds} ms");
         cancellationToken.ThrowIfCancellationRequested();
         var loggedFields = parsed.Fields.Select(field => field with { Value = outcome.Values[field.Id] }).ToArray();
-        return new FeedWorkflowResult(content, parsed.Fields, loggedFields, outcome.Events, outcome.CandidateValues);
+        return new FeedWorkflowResult(content, parsed.Fields, loggedFields, outcome.Events, outcome.CandidateValues, outcome.ProtectedCandidateValues);
     }
 
     #endregion

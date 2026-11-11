@@ -27,15 +27,16 @@ public abstract class FeedLogger
     /// <param name="message">The original delivery.</param>
     /// <param name="result">The validated output and diagnostic fields, or null when rejected.</param>
     /// <param name="reason">The rejection reason, or null when published.</param>
+    /// <param name="detection">The detection log block for this message, or null when detection did not run.</param>
     /// <returns>The transaction log text.</returns>
     /// <exception cref="InvalidDataException">The delivery belongs to another feed.</exception>
-    public string Format(FeedMessage message, FeedWorkflowResult? result, string? reason)
+    public string Format(FeedMessage message, FeedWorkflowResult? result, string? reason, string? detection = null)
     {
         if (message.Delivery.Feed != Feed)
         {
             throw new InvalidDataException("Feed logger and delivery route differ.");
         }
-        return FeedTransactionLog.Format(message, result, reason);
+        return FeedTransactionLog.Format(message, result, reason, detection);
     }
 
     #endregion

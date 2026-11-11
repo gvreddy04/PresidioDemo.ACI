@@ -5,7 +5,7 @@ using PresidioDemo.Core.Models;
 namespace PresidioDemo.Core.Logging;
 
 /// <summary>
-/// Reports complete input, decoded payload, plain text and parsed fields, followed by output payload and complete feed data.
+/// Reports complete input, decoded payload, plain text and the detection block, followed by output payload and complete feed data.
 /// </summary>
 public static class FeedTransactionLog
 {
@@ -27,8 +27,9 @@ public static class FeedTransactionLog
     /// <param name="original">The complete delivery metadata and original or protected message bytes.</param>
     /// <param name="result">The validated protected output and its optional diagnostic field sets.</param>
     /// <param name="reason">The validated explanation for retaining or rejecting the complete input.</param>
+    /// <param name="detection">The detection log block for this message, or null when detection did not run.</param>
     /// <returns>The complete readable diagnostic report retaining supplied source values.</returns>
-    public static string Format(FeedMessage original, FeedWorkflowResult? result, string? reason)
+    public static string Format(FeedMessage original, FeedWorkflowResult? result, string? reason, string? detection = null)
     {
         var report = new StringBuilder();
         report.AppendLine($"Transaction: {original.Delivery.MessageId:N}");
@@ -38,7 +39,7 @@ public static class FeedTransactionLog
         AppendHeading(report, "BEFORE ANONYMIZATION");
         AppendMessage(report, original, completeFeedFirst: true);
         report.AppendLine();
-        AppendFields(report, result?.OriginalFields);
+        AppendDetection(report, detection);
         report.AppendLine();
         AppendHeading(report, "AFTER ANONYMIZATION");
         if (result is null)
@@ -104,21 +105,18 @@ public static class FeedTransactionLog
     }
 
     /// <summary>
-    /// Appends parsed field locations, policy paths and original values.
+    /// Appends the detection log block, placed after the payload hex dump so its binary offsets can be found there.
     /// </summary>
     /// <param name="report">The transaction-report buffer receiving diagnostic content.</param>
-    /// <param name="fields">The complete ordered parsed field set or reviewed field definitions.</param>
-    private static void AppendFields(StringBuilder report, IReadOnlyList<FeedField>? fields)
+    /// <param name="detection">The block from <see cref="DetectionLog.FormatBlock"/>, or null when detection did not run.</param>
+    private static void AppendDetection(StringBuilder report, string? detection)
     {
-        if (fields is null)
+        if (detection is null)
         {
             return;
         }
-        report.AppendLine("Parsed fields (location | policy field | value):");
-        foreach (var field in fields)
-        {
-            report.AppendLine($"{JsonSerializer.Serialize(field.Id)} | {JsonSerializer.Serialize(field.Name)} | {JsonSerializer.Serialize(field.Value)}");
-        }
+        report.AppendLine("Detection (binary offsets count from the start of the payload shown above):");
+        report.Append(detection);
         report.AppendLine();
     }
 

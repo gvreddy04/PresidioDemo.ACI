@@ -168,25 +168,57 @@ Patterns use syntax shared by .NET and the Python `regex` module and match case-
 
 ### Detection log
 
-`Presidio:DetectionLog` (off by default; for example `Presidio__DetectionLog=true` in one feed's task definition, read at startup) writes one value-free line per decoded string (WR-018):
+`Presidio:DetectionLog` (off by default; for example `Presidio__DetectionLog=true` in one feed's task definition, read at startup) writes one block per message to the worker's standard output (WR-018). The header names the feed, the transaction, the outcome and the counts. Below it, every decoded string is listed exactly once, in one of three groups:
+
+- **PII fields (changed):** `masked`, `replaced`, `masked-inside`.
+- **Non-PII fields (unchanged):** `kept`, `anchor`.
+- **Review (a format or keep may be needed):** `masked-by-default` (changed: no format or keep matched, so the whole string was masked) and `missed-below-threshold` (unchanged: a keep matched, with a weak detection inside).
+
+Without the values flag a block holds no value, only lengths and character shapes, so it may be switched on in any environment. A binary string (ACI, ETKT, PNR) is located by its slot and its byte offset in the decoded payload (`offsets=payload`); binary feeds have no field names. A JSON string is located by its JSON Pointer, in which every property name the feed's recognizer file does not declare is `?`, because a producer could use a value as a key. Made-up examples:
 
 ```text
-PNR 3f9a… DETECT slot=12 key=- len=13 shape=AAAAAA/AAAAAA format=passengerName entity=PERSON score=0.90 decision=masked
+PNR 3f9a… DETECTION PUBLISHED strings=4 pii=1 non-pii=2 review=1 offsets=payload
+  PII fields (changed)
+    slot 12 @0x01A4  len=13 shape=AAAAAA/AAAAAA  format=passengerName entity=PERSON score=0.90 decision=masked
+  Non-PII fields (unchanged)
+    slot 2 @0x0018   len=6 shape=AAA999  format=anchor entity=PNR score=1.00 decision=anchor
+    slot 7 @0x00E0   len=6 shape=AA9999  format=flightNumber entity=- score=0.00 decision=kept
+  Review (a format or keep may be needed)
+    slot 18 @0x0288  len=10 shape=AA99999999  unchanged  format=loyalty entity=LOYALTY score=0.30 decision=missed-below-threshold
+
+PNR-Linking 7c1e… DETECTION PUBLISHED strings=3 pii=1 non-pii=1 review=1
+  PII fields (changed)
+    /0/FirstName  len=6 shape=AAAAAA  format=passengerName entity=PERSON score=1.00 decision=replaced
+  Non-PII fields (unchanged)
+    /0/PNROwner   len=6 shape=AAA999  format=anchor entity=PNR score=1.00 decision=anchor
+  Review (a format or keep may be needed)
+    /0/?          len=9 shape=AAA AAAAA  changed  format=none entity=- score=0.00 decision=masked-by-default
 ```
 
-Decisions are `masked`, `replaced`, `kept`, `masked-inside`, `anchor`, `masked-by-default` and `missed-below-threshold` (a kept value with a weak detection inside it, worth a format). Lines never contain a value. `key=` shows a JSON property name only when the feed's recognizer file declares it, and `?` otherwise, because a producer could use a value as a key. Original values appear only in the local harness reports under `.test-runs/`, unless the values flag below is on.
+An empty group is printed as `(none)`. A message dead-lettered after detection ran has `DEAD-LETTERED` and its reason in the header; a message rejected before detection (malformed, or not CCSID 1208) has no block. Every line after the header is indented, so a log collector can keep the block as one entry (see the CloudWatch setting in the [deployment plan](docs/aws-deployment-plan.md)).
 
-**Values in non-production (WR-020).** For testing in Local, Dev and QA, `Presidio:DetectionLogValues` (off by default, read at startup; for example `Presidio__DetectionLogValues=true`) appends the actual decoded value, JSON-encoded so it stays on one line, to each line. Every other field is unchanged:
+**Adding a field from a review entry.** A `masked-by-default` entry is a string no format or keep recognised: if it is personal data, add a format for it to the feed's recognizer file; if it is not, add a keep. A `missed-below-threshold` entry was published unchanged with a weak detection inside: add or tighten a format. For JSON, declare the property name with a `<key>`; for binary feeds, write a pattern for the value's shape. Then follow [Changing a format](#changing-a-format).
+
+**Values in non-production (WR-020).** For testing in Local, Dev and QA, `Presidio:DetectionLogValues` (off by default, read at startup; for example `Presidio__DetectionLogValues=true`) adds the actual values: `"before" -> "after"` for a changed string, `"before"` for an unchanged one, and `-> not published` for a dead-lettered message. JSON entries show the full pointer with every property name. Values and pointers are JSON-encoded, so none of them can break a line:
 
 ```text
-PNR 3f9a… DETECT slot=12 key=- len=13 shape=AAAAAA/AAAAAA format=passengerName entity=PERSON score=0.90 decision=masked value="MILLER/JORDAN"
+PNR 3f9a… DETECTION PUBLISHED strings=4 pii=1 non-pii=2 review=1 offsets=payload
+  PII fields (changed)
+    slot 12 @0x01A4  "MILLER/JORDAN" -> "######/######"  format=passengerName entity=PERSON score=0.90 decision=masked
+  ...
+PNR-Linking 7c1e… DETECTION PUBLISHED strings=3 pii=1 non-pii=1 review=1
+  ...
+  Review (a format or keep may be needed)
+    "/0/SeatNote"  "VIP GUEST" -> "#########"  changed  format=none entity=- score=0.00 decision=masked-by-default
 ```
 
-- It needs `Presidio:DetectionLog` on as well. With only the values flag set, the worker writes no detection lines and logs one warning at startup.
+- It needs `Presidio:DetectionLog` on as well. With only the values flag set, the worker writes no detection blocks and logs one warning at startup.
 - It works only when the selected environment is `Local`, `Dev` or `QA` (an unset `DOTNET_ENVIRONMENT` falls back to `Local` and counts). In any other environment, such as `Prod`, the worker refuses to start.
-- Lines are written for published messages and for messages dead-lettered after detection ran. A message rejected before detection (malformed, or not CCSID 1208) has no lines.
-- Outside Local, the feed's log group must keep lines for at most 7 days and be readable only by the PII team role while the flag is on, and the flag is switched only through a reviewed task-definition deploy (PR-006, [deployment plan](docs/aws-deployment-plan.md)).
-- The test harness runs the same mode with `--detection-log values`.
+- Blocks are written for published messages and for messages dead-lettered after detection ran.
+- Outside Local, the feed's log group must keep entries for at most 7 days and be readable only by the PII team role while the flag is on, and the flag is switched only through a reviewed task-definition deploy (PR-006, [deployment plan](docs/aws-deployment-plan.md)).
+- The test harness runs the same modes with `--detection-log on` and `--detection-log values`.
+
+**Harness files.** Each before/after file in `logs/<feed>/` holds the block with values right after the payload hex dump, so a binary offset can be looked up there. Each run also writes `detection-summary.txt` beside `report.json` (WR-021): per feed, every review-group field across the run, by JSON path with array indexes as `*` (real property names, because the file stays local) or binary slot and offset, with its decision, character shapes, a count and the file names. It never holds a value.
 
 ### Results on the supplied samples
 
@@ -199,8 +231,8 @@ Compared byte for byte with the output of the former field policies, 8 of the 17
 - A JSON number or boolean under a key that no recognizer file declares is published unchanged; only strings are detected.
 - Binary strings of one to three characters are published unchanged (WR-015), for example seat numbers and three-digit phone area codes.
 - In binary feeds, a value that matches a keep is published even if it is personal data with the same shape; for example, an ACI eight-digit date of birth matches the `date` keep. Binary strings carry no labels, so a keep cannot tell the two apart.
-- A value that detection misses is published (WR-016); the detection log shows `masked-by-default`, `missed-below-threshold` and the formats used, so a format can be added.
-- JSON property names are structure and are never changed, even if a producer uses a value as a key; the detection log shows such undeclared keys as `?`.
+- A value that detection misses is published (WR-016); the detection log lists it under Review (`masked-by-default` or `missed-below-threshold`), and `detection-summary.txt` collects these per feed, so a format can be added.
+- JSON property names are structure and are never changed, even if a producer uses a value as a key; value-free detection blocks show such undeclared keys as `?`.
 - Binary text that contains NUL bytes, such as UTF-16, is not recognised as text and is published unchanged. Producers send ASCII; the supplied exports use CCSID 437 and 500.
 - In ETKT, a six-character value of letters and digits at a divide-event PNR position is kept as a PNR.
 - A Presidio regex timeout is detected through Presidio's "timed out" warning. Recheck `test_presidio_rules` when Presidio is upgraded.
@@ -361,7 +393,7 @@ The test harness sends `.txt` (IBM MQ export) and `.bin` (raw payload) files thr
 dotnet run --project tests/FeedPipelineHarness -- --input docs/sample-docs --output .test-runs/samples
 ```
 
-It writes `published/<feed>/`, `dead-letter/<feed>/` (with a `.reason.txt` per file), full before/after logs in `logs/<feed>/` and `report.json`. The exit code is 0 when every file is published and 2 when any file is rejected. Files are routed by their feed folder, or by name (`ACI_03.txt`, `SEATS_02_Negative_Testing.txt`). `--recognizer-directory` selects another recognizer folder, `--detection-log on` prints the value-free detection log, and `--fail-publishes <n>` simulates a broker outage.
+It writes `published/<feed>/`, `dead-letter/<feed>/` (with a `.reason.txt` per file), full before/after logs in `logs/<feed>/`, `report.json` and `detection-summary.txt`. The exit code is 0 when every file is published and 2 when any file is rejected. Files are routed by their feed folder, or by name (`ACI_03.txt`, `SEATS_02_Negative_Testing.txt`). `--recognizer-directory` selects another recognizer folder, `--detection-log on` prints the value-free detection blocks (`values` adds the values), and `--fail-publishes <n>` simulates a broker outage.
 
 ## Samples and configuration files
 

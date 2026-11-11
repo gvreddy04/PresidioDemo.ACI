@@ -58,7 +58,15 @@ public enum DetectionDecision
 /// <param name="Entity">The detected entity types, joined with <c>+</c>, or empty.</param>
 /// <param name="Score">The highest detection score, or zero.</param>
 /// <param name="Decision">What happened to the string.</param>
-public sealed record DetectionEvent(int Slot, string Key, int Length, string Shape, string Format, string Entity, double Score, DetectionDecision Decision);
+/// <param name="Pointer">For JSON, the field's JSON Pointer with every property name, which may itself be a value; written
+/// only with <c>Presidio:DetectionLogValues</c> on (WR-020). Empty for binary feeds.</param>
+/// <param name="SafePointer">For JSON, the JSON Pointer with every property name the feed's recognizer file does not declare
+/// replaced by <c>?</c>; array indexes stay (WR-018). Empty for binary feeds.</param>
+/// <param name="Pattern">For JSON, the field's path with array indexes as <c>*</c>, used to group fields across messages in
+/// the local harness summary (WR-021). Empty for binary feeds.</param>
+/// <param name="Offset">For binary feeds, the payload byte offset of the string; otherwise null.</param>
+public sealed record DetectionEvent(int Slot, string Key, int Length, string Shape, string Format, string Entity, double Score, DetectionDecision Decision,
+    string Pointer = "", string SafePointer = "", string Pattern = "", int? Offset = null);
 
 /// <summary>
 /// The protected values for every parsed field, and one detection event per decoded string.
@@ -67,8 +75,10 @@ public sealed record DetectionEvent(int Slot, string Key, int Length, string Sha
 /// <param name="Events">The value-free detection events, in candidate order.</param>
 /// <param name="CandidateValues">The decoded value of each candidate, by slot, kept beside the events so the events stay
 /// value-free; written to the detection log only with <c>Presidio:DetectionLogValues</c> on (WR-020).</param>
+/// <param name="ProtectedCandidateValues">The protected value of each candidate, by slot, for the after values of the
+/// detection log under WR-020.</param>
 public sealed record DetectionOutcome(IReadOnlyDictionary<string, string> Values, IReadOnlyList<DetectionEvent> Events,
-    IReadOnlyList<string>? CandidateValues = null);
+    IReadOnlyList<string>? CandidateValues = null, IReadOnlyList<string>? ProtectedCandidateValues = null);
 
 #endregion
 
@@ -140,23 +150,23 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
             {
                 var field = candidates[slot];
                 string key = binary ? "" : Key(field.Name);
-                string logged = LoggedKey(set, key, binary);
+                var at = Locate(set, field, key, binary);
                 if (field.Value.Length == 0)
                 {
-                    events[slot] = Event(slot, logged, field.Value, "none", "", 0, DetectionDecision.Kept);
+                    events[slot] = Event(slot, at, field.Value, "none", "", 0, DetectionDecision.Kept);
                 }
                 else if (anchors.Whole.Contains(slot))
                 {
-                    events[slot] = Event(slot, logged, field.Value, "anchor", "PNR", 1, DetectionDecision.Anchor);
+                    events[slot] = Event(slot, at, field.Value, "anchor", "PNR", 1, DetectionDecision.Anchor);
                 }
                 else if (!binary && FormatByPath(set, field.Name) is { } byKey)
                 {
                     values[field.Id] = Protect(field.Value, byKey.Action, byKey.MaskCharacter, byKey.Replacement);
-                    events[slot] = Event(slot, logged, field.Value, byKey.Name, byKey.Entity, 1, Decision(byKey.Action));
+                    events[slot] = Event(slot, at, field.Value, byKey.Name, byKey.Entity, 1, Decision(byKey.Action));
                 }
                 else if (!binary && KeepByKey(set, key) is { Scan: false } keptByKey)
                 {
-                    events[slot] = Event(slot, logged, field.Value, keptByKey.Name, "", 0, DetectionDecision.Kept);
+                    events[slot] = Event(slot, at, field.Value, keptByKey.Name, "", 0, DetectionDecision.Kept);
                 }
                 else
                 {
@@ -170,7 +180,7 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
                 int slot = pending[i];
                 var field = candidates[slot];
                 string key = binary ? "" : Key(field.Name);
-                string logged = LoggedKey(set, key, binary);
+                var at = Locate(set, field, key, binary);
                 var found = spans[i];
                 var strong = found.Where(span => span.Score >= set.Threshold).ToArray();
                 var wholeSpans = strong.Where(span => span.Start == 0 && span.End == field.Value.Length).OrderByDescending(span => span.Score).ToArray();
@@ -183,7 +193,7 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
                     var whole = formatWhole ?? wholeSpans[0];
                     var (action, mask, replacement, name) = Protection(set, whole);
                     values[field.Id] = Protect(field.Value, binary ? DetectionAction.Mask : action, mask, replacement);
-                    events[slot] = Event(slot, logged, field.Value, name, whole.Entity, whole.Score, Decision(binary ? DetectionAction.Mask : action));
+                    events[slot] = Event(slot, at, field.Value, name, whole.Entity, whole.Score, Decision(binary ? DetectionAction.Mask : action));
                 }
                 else if (keep is not null)
                 {
@@ -193,12 +203,12 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
                     var weak = keep.Scan ? found.Where(span => span.Score < set.Threshold && !inside.Any(s => s.Start <= span.Start && s.End >= span.End)).ToArray() : [];
                     var decision = inside.Length > 0 ? DetectionDecision.MaskedInside : weak.Length > 0 ? DetectionDecision.MissedBelowThreshold : DetectionDecision.Kept;
                     var reported = inside.Length > 0 ? inside : weak;
-                    events[slot] = Event(slot, logged, field.Value, keep.Name, Entities(reported), reported.Select(s => s.Score).DefaultIfEmpty(0).Max(), decision);
+                    events[slot] = Event(slot, at, field.Value, keep.Name, Entities(reported), reported.Select(s => s.Score).DefaultIfEmpty(0).Max(), decision);
                 }
                 else
                 {
                     values[field.Id] = DefaultMask(field.Value, set.DefaultMaskCharacter);
-                    events[slot] = Event(slot, logged, field.Value, "none", Entities(found), found.Select(s => s.Score).DefaultIfEmpty(0).Max(), DetectionDecision.MaskedByDefault);
+                    events[slot] = Event(slot, at, field.Value, "none", Entities(found), found.Select(s => s.Score).DefaultIfEmpty(0).Max(), DetectionDecision.MaskedByDefault);
                 }
             }
         }
@@ -223,7 +233,7 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
                 throw new DetectionTrace(detected, candidateValues).Reject("Protection changed an embedded PNR.");
             }
         }
-        return new DetectionOutcome(values, detected, candidateValues);
+        return new DetectionOutcome(values, detected, candidateValues, candidates.Select(c => values[c.Id]).ToArray());
     }
 
     /// <summary>
@@ -362,12 +372,35 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
         key.Length == 0 ? null : set.Keeps.FirstOrDefault(k => k.Keys.Contains(key, StringComparer.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Returns the property name to log: a key the feed's recognizer file declares, or <c>?</c> for any other key, which
-    /// could itself be a value in dynamic-key JSON (WR-018).
+    /// Returns whether the feed's recognizer file declares a JSON property name in a format, keep or anchor.
     /// </summary>
-    private static string LoggedKey(FeedRecognizerSet set, string key, bool binary) =>
-        binary ? "" : FormatByKey(set, key) is not null || KeepByKey(set, key) is not null ||
-            set.Anchors.Any(a => a.Keys.Contains(key, StringComparer.OrdinalIgnoreCase)) ? key : "?";
+    private static bool IsDeclared(FeedRecognizerSet set, string key) =>
+        FormatByKey(set, key) is not null || KeepByKey(set, key) is not null ||
+            set.Anchors.Any(a => a.Keys.Contains(key, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Returns where a decoded string sits, for the detection log. A property name the recognizer file does not declare
+    /// could itself be a value in dynamic-key JSON, so the value-free forms show it as <c>?</c> (WR-018); the full pointer
+    /// is written only under WR-020.
+    /// </summary>
+    /// <param name="set">The recognizer set.</param>
+    /// <param name="field">The decoded string.</param>
+    /// <param name="key">The field's JSON property name, or empty for binary feeds.</param>
+    /// <param name="binary">Whether the feed is binary.</param>
+    /// <returns>The logged key and the pointer forms, or the payload offset for a binary string.</returns>
+    private static Location Locate(FeedRecognizerSet set, FeedField field, string key, bool binary)
+    {
+        if (binary)
+        {
+            return new Location("", "", "", "", field.Offset);
+        }
+        // The instance pointer and the wildcard path have the same segments; a "*" in the path marks an array index.
+        string[] instance = field.Id.Split('/');
+        string[] pattern = field.Name.Split('/');
+        var safe = instance.Select((segment, i) => segment.Length == 0 || (i < pattern.Length && pattern[i] == "*") ||
+            IsDeclared(set, segment.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal)) ? segment : "?");
+        return new Location(IsDeclared(set, key) ? key : "?", field.Id, string.Join('/', safe), field.Name, null);
+    }
 
     /// <summary>
     /// Returns the unescaped property names of a wildcard field path, without array wildcards.
@@ -490,8 +523,9 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     /// <summary>
     /// Creates a value-free event.
     /// </summary>
-    private static DetectionEvent Event(int slot, string key, string value, string format, string entity, double score, DetectionDecision decision) =>
-        new(slot, key, value.Length, Shape(value), format, entity, Math.Round(score, 2, MidpointRounding.AwayFromZero), decision);
+    private static DetectionEvent Event(int slot, Location at, string value, string format, string entity, double score, DetectionDecision decision) =>
+        new(slot, at.Key, value.Length, Shape(value), format, entity, Math.Round(score, 2, MidpointRounding.AwayFromZero), decision,
+            at.Pointer, at.SafePointer, at.Pattern, at.Offset);
 
     #endregion
 
@@ -503,6 +537,16 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     /// <param name="Whole">Slots whose whole value is a PNR.</param>
     /// <param name="Embedded">Slots holding an embedded PNR, with its character range.</param>
     private sealed record Anchoring(HashSet<int> Whole, Dictionary<int, (int Start, int Length)> Embedded);
+
+    /// <summary>
+    /// Where one decoded string sits, as the detection events record it.
+    /// </summary>
+    /// <param name="Key">The declared property name, <c>?</c>, or empty for binary feeds.</param>
+    /// <param name="Pointer">The full JSON Pointer, or empty for binary feeds.</param>
+    /// <param name="SafePointer">The JSON Pointer with undeclared property names as <c>?</c>, or empty.</param>
+    /// <param name="Pattern">The wildcard path, or empty.</param>
+    /// <param name="Offset">The payload byte offset of a binary string, or null.</param>
+    private sealed record Location(string Key, string Pointer, string SafePointer, string Pattern, int? Offset);
 
     /// <summary>
     /// One span returned by Presidio.
