@@ -42,14 +42,16 @@ public sealed class FeedWorkerService(IMessagingConnection connection, IMessageC
     /// </summary>
     /// <param name="messaging">The validated broker-neutral settings.</param>
     /// <returns>The route for each routed feed.</returns>
-    /// <exception cref="InvalidOperationException">A route names an unknown feed or a feed has more than one route.</exception>
+    /// <exception cref="InvalidOperationException">A route names a feed this build does not support, such as one left over
+    /// from settings written for another build, or a feed has more than one route.</exception>
     public static IReadOnlyDictionary<FeedType, MessageRoute> Routes(MessagingOptions messaging)
     {
         var routes = new Dictionary<FeedType, MessageRoute>();
-        foreach (var route in messaging.Routes)
+        for (int index = 0; index < messaging.Routes.Count; index++)
         {
+            var route = messaging.Routes[index];
             var feed = FeedCatalog.All.SingleOrDefault(f => f.FolderName.Equals(route.Feed, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException($"Unknown feed {route.Feed} in Messaging:Routes.");
+                ?? throw new InvalidOperationException($"Messaging:Routes:{index} names feed '{route.Feed}', which this build does not support.");
             if (!routes.TryAdd(feed.Type, route))
             {
                 throw new InvalidOperationException($"Feed {route.Feed} has more than one route.");

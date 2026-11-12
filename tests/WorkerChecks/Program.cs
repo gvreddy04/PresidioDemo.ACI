@@ -93,6 +93,18 @@ var duplicateFeed = new ConfigurationBuilder().AddConfiguration(local).AddInMemo
 Reject(() => FeedWorkerService.Routes(MessagingOptions.Load(duplicateFeed)), "a feed with two routes is rejected");
 var unknownFeed = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Routes:0:Feed", "IND")]).Build();
 Reject(() => FeedWorkerService.Routes(MessagingOptions.Load(unknownFeed)), "a route for a feed without a codec is rejected");
+// AC-006: a route left over from settings for a build with more feeds (TKT, the ticket feed this branch no longer
+// routes) stops startup and names the route and the feed.
+var removedFeed = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Routes:0:Feed", "TKT")]).Build();
+try
+{
+    FeedWorkerService.Routes(MessagingOptions.Load(removedFeed));
+    throw new Exception("Expected rejection: a route naming a removed feed");
+}
+catch (InvalidOperationException ex) when (ex.Message == "Messaging:Routes:0 names feed 'TKT', which this build does not support.")
+{
+    Console.WriteLine("PASS a route naming a removed feed stops startup with its route index and feed name");
+}
 Require(PresidioOptions.Load(local, runRoot).PythonEnvironment is null, "without Presidio:PythonEnvironment the project's src/.venv applies");
 string venv = Directory.CreateDirectory(Path.Combine(runRoot, "venv")).FullName;
 File.WriteAllText(Path.Combine(venv, "pyvenv.cfg"), "home = /usr/bin\nversion = 3.12.3\n");
