@@ -126,7 +126,7 @@ public static class DetectionLog
     public static string FormatBlock(FeedType feed, Guid transaction, IReadOnlyList<DetectionEvent> events, string? rejectReason = null,
         IReadOnlyList<string>? before = null, IReadOnlyList<string>? after = null)
     {
-        bool binary = feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR;
+        bool binary = feed is FeedType.PNR;
         var groups = Enumerable.Range(0, events.Count).ToLookup(i => Group(events[i].Decision));
         var locations = events.Select(e => Location(e, binary, before is not null)).ToArray();
         int width = Math.Min(locations.Select(location => location.Length).DefaultIfEmpty(0).Max(), MaximumPadding);

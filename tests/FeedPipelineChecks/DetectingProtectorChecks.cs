@@ -27,8 +27,8 @@ internal static class DetectingProtectorChecks
         var protector = new DetectingFeedProtector(sets);
 
         // Detection failure: the bridge has no registry for an unconfigured feed name, so the call fails and dead-letters.
-        var unconfigured = new DetectingFeedProtector(new Dictionary<FeedType, FeedRecognizerSet> { [FeedType.ACI] = sets[FeedType.ACI] with { Feed = FeedType.ACI } });
-        await RejectAsync(() => unconfigured.ProtectAsync(FeedType.ACI, Parse(Path.Combine(samples, "ACI", "ACI.txt")), CancellationToken.None),
+        var unconfigured = new DetectingFeedProtector(new Dictionary<FeedType, FeedRecognizerSet> { [FeedType.PNR] = sets[FeedType.PNR] });
+        await RejectAsync(() => unconfigured.ProtectAsync(FeedType.PNR, Parse(Path.Combine(samples, "PNR", "PNR.txt")), CancellationToken.None),
             "Local Presidio detection failed", "a Presidio failure before configuration dead-letters");
         protector.Configure();
 
@@ -47,28 +47,19 @@ internal static class DetectingProtectorChecks
             byte[] output = codec.Serialize(parsed, outcome.Values);
             codec.Validate(parsed, output);
             var anchors = outcome.Events.Where(e => e.Decision == DetectionDecision.Anchor).ToArray();
-            Check(anchors.Length > 0 || feed == FeedType.ETKT, Path.GetFileName(path) + ": a PNR anchor was found");
-            var decoded = (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? parsed.Fields : JsonFeedParser.StringFields(parsed))
+            Check(anchors.Length > 0, Path.GetFileName(path) + ": a PNR anchor was found");
+            var decoded = parsed.Fields
                 .Select(f => f.Value).Where(v => v.Any(char.IsAsciiLetterOrDigit) && DetectingFeedProtector.Shape(v) != v).ToHashSet(StringComparer.Ordinal);
             Check(outcome.Events.All(e => !decoded.Contains(e.Shape) && !decoded.Contains(e.Key) && !decoded.Contains(e.Format) && !decoded.Contains(e.Entity)),
                 Path.GetFileName(path) + ": no detection event field carries a decoded value");
             // WR-020: the decoded values travel beside the events, one per slot, for the values flag only.
-            var candidateValues = (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? parsed.Fields : JsonFeedParser.StringFields(parsed)).Select(f => f.Value);
+            var candidateValues = parsed.Fields.Select(f => f.Value);
             Check(outcome.CandidateValues is { } carried && carried.Count == outcome.Events.Count && carried.SequenceEqual(candidateValues),
                 Path.GetFileName(path) + ": the candidate values match the decoded strings by slot");
-            // WR-018: a binary string is located by its payload offset only; a JSON value-free pointer holds no value.
-            if (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR)
-            {
-                var payload = FeedPayloadReader.Read(message).Payload;
-                Check(outcome.Events.Zip(parsed.Fields).All(pair => pair.First.Offset is int at && pair.First.Pointer.Length == 0 && pair.First.SafePointer.Length == 0 &&
-                    Encoding.ASCII.GetString(payload.AsSpan(at, pair.Second.Value.Length)) == pair.Second.Value), Path.GetFileName(path) + ": each binary event's offset leads to its value");
-            }
-            else
-            {
-                // Array indexes are digits and may equal a short numeric string value; only property names are checked.
-                Check(outcome.Events.All(e => e.Offset is null && e.SafePointer.Split('/').All(segment => segment.All(char.IsAsciiDigit) || !decoded.Contains(segment))),
-                    Path.GetFileName(path) + ": no value-free JSON pointer carries a decoded value");
-            }
+            // WR-018: a binary string is located by its payload offset only.
+            var payload = FeedPayloadReader.Read(message).Payload;
+            Check(outcome.Events.Zip(parsed.Fields).All(pair => pair.First.Offset is int at && pair.First.Pointer.Length == 0 && pair.First.SafePointer.Length == 0 &&
+                Encoding.ASCII.GetString(payload.AsSpan(at, pair.Second.Value.Length)) == pair.Second.Value), Path.GetFileName(path) + ": each binary event's offset leads to its value");
             published++;
         }
         Console.WriteLine($"PASS {published} production samples protected, rebuilt and validated with the recognizer sets");
@@ -127,22 +118,6 @@ internal static class DetectingProtectorChecks
         var shortValues = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, before: ["MILLER/JORDAN"], after: fictionalAfter);
         Check(shortValues.Contains("\"MILLER/JORDAN\" -> \"######/######\"", StringComparison.Ordinal) && shortValues.Contains("len=6 shape=AAA999", StringComparison.Ordinal),
             "a slot without a value keeps the value-free form");
-        DetectionEvent[] jsonEvents = [new(0, "?", 4, "AAAA", "none", "", 0, DetectionDecision.MaskedByDefault, "/0/con\ntacts/j.miller@example.com", "/0/?/?", "/*/con\ntacts/j.miller@example.com")];
-        var jsonFree = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PnrLinking, Guid.Empty, jsonEvents);
-        var jsonValued = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PnrLinking, Guid.Empty, jsonEvents, before: ["HOME"], after: ["####"]);
-        Check(jsonFree.Contains("    /0/?/?  len=4 shape=AAAA  changed", StringComparison.Ordinal) && !jsonFree.Contains("miller", StringComparison.Ordinal)
-            && !Lines(jsonFree)[0].Contains("offsets=", StringComparison.Ordinal), "a value-free JSON entry shows undeclared names as ?");
-        Check(jsonValued.Contains("    \"/0/con\\ntacts/j.miller@example.com\"  \"HOME\" -> \"####\"", StringComparison.Ordinal) && Lines(jsonValued).Length == Lines(jsonFree).Length,
-            "a values JSON entry shows the full pointer, encoded so a key cannot break the line");
-        // Review R-009: one very long location must not pad every other line of the block to its width.
-        DetectionEvent[] wide =
-        [
-            new(0, "?", 4, "AAAA", "none", "", 0, DetectionDecision.MaskedByDefault, "/0/" + new string('k', 5000), "/0/?", "/*/" + new string('k', 5000)),
-            new(1, "PNROwner", 6, "AAA999", "anchor", "PNR", 1, DetectionDecision.Anchor, "/0/PNROwner", "/0/PNROwner", "/*/PNROwner"),
-        ];
-        var wideBlock = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PnrLinking, Guid.Empty, wide, before: ["HOME", "K7QX2M"], after: ["####", "K7QX2M"]);
-        Check(Lines(wideBlock).Single(line => line.Contains("PNROwner", StringComparison.Ordinal)).Length < 120,
-            "a long location is written unpadded instead of widening every line");
         // Review R-010: zero-width and bidirectional formatting characters are escaped, and the value still reads back.
         string disguised = "CALL " + (char)0x202E + "MILLER" + (char)0x200B + " HOME";
         string encodedDisguise = PresidioDemo.Core.Logging.DetectionLog.Encode(disguised);
@@ -174,162 +149,59 @@ internal static class DetectingProtectorChecks
             "400 blocks written from 16 threads at once each come out whole");
         Console.WriteLine("PASS the detection log writes one grouped block per message, with values only when passed (WR-018, WR-020)");
 
-        // ACI: the PNR is found next to the passenger name whether it is string 9 or string 8 (W-019).
-        foreach (string name in new[] { "ACI.txt", "ACI_05.txt" })
-        {
-            var outcome = await protector.ProtectAsync(FeedType.ACI, Parse(Path.Combine(samples, "ACI", name)), CancellationToken.None);
-            var anchor = outcome.Events.Single(e => e.Decision == DetectionDecision.Anchor);
-            var nameEvent = outcome.Events.First(e => e.Format == "passengerName");
-            Check(anchor.Slot == nameEvent.Slot - 1 && anchor.Length == 6, name + ": PNR anchored just before the passenger name");
-        }
-        Console.WriteLine("PASS ACI PNR anchored before the first passenger name in ACI.txt and ACI_05.txt");
-
         // V-06: a removed neighbour or a PNR that is no longer PNR-shaped dead-letters the message.
-        string aci = Path.Combine(samples, "ACI", "ACI.txt");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.ACI, ParseEdited(aci, FeedType.ACI, (fields, payload) =>
-            Overwrite(payload, fields.First(f => f.Value.Contains('/') && f.Value.Count(c => c == '/') == 1 && !f.Value.Any(char.IsDigit)), '/', 'X')), CancellationToken.None),
-            "PNR anchor is missing", "a missing passenger-name neighbour dead-letters ACI");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.ACI, ParseEdited(aci, FeedType.ACI, (fields, payload) =>
-        {
-            int nameSlot = fields.ToList().FindIndex(f => f.Value.Contains('/') && !f.Value.Any(char.IsDigit));
-            OverwriteFirst(payload, fields[nameSlot - 1], '-');
-        }), CancellationToken.None), "anchor position is not PNR-shaped", "a PNR that is not PNR-shaped dead-letters ACI");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.PNR, ParseEdited(Path.Combine(samples, "PNR", "PNR.txt"), FeedType.PNR, (fields, payload) =>
+        string pnrSample = Path.Combine(samples, "PNR", "PNR.txt");
+        await RejectAsync(() => protector.ProtectAsync(FeedType.PNR, ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
             OverwriteFirst(payload, fields.First(f => f.Value.Length == 9 && f.Value.All(char.IsAsciiDigit)), 'A')), CancellationToken.None),
             "PNR anchor is missing", "a missing creation-time neighbour dead-letters PNR");
-        var linking = Parse(Path.Combine(samples, "PNR-Linking", "PNR_LINKING.txt"));
-        var brokenLinking = new ParsedFeed(linking.Fields.Select(f => f.Name.EndsWith("/UaRecordLocator", StringComparison.Ordinal) ? f with { Value = "AB" } : f).ToArray(), linking.Layout);
-        await RejectAsync(() => protector.ProtectAsync(FeedType.PnrLinking, StringLayout(linking, brokenLinking), CancellationToken.None),
-            "not PNR-shaped", "a JSON PNR anchor that is not PNR-shaped dead-letters PNR-Linking");
-
-        // A number under a personal-data key (PNR_LINKING_03's numeric DOB) cannot be protected in its type: dead-letter.
-        await RejectAsync(() => protector.ProtectAsync(FeedType.PnrLinking, Parse(Path.Combine(samples, "PNR-Linking", "PNR_LINKING_03_Negative_Testing.txt")), CancellationToken.None),
-            "number or boolean", "a numeric value under a personal-data key dead-letters PNR_LINKING_03");
+        await RejectAsync(() => protector.ProtectAsync(FeedType.PNR, ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
+        {
+            int timeSlot = fields.ToList().FindIndex(f => f.Value.Length == 9 && f.Value.All(char.IsAsciiDigit));
+            OverwriteFirst(payload, fields[timeSlot + 1], '-');
+        }), CancellationToken.None), "anchor position is not PNR-shaped", "a PNR that is not PNR-shaped dead-letters PNR");
 
         // Unmatched strings are masked across their full width, keeping literal * separators (WR-014).
         Check(DetectingFeedProtector.DefaultMask("Q7 ZZ*AB", '#') == "#####*##", "default mask keeps width and literal *");
-        var etkt = await protector.ProtectAsync(FeedType.ETKT, Parse(Path.Combine(samples, "ETKT", "ETKT_05.txt")), CancellationToken.None);
-        Check(etkt.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 2, "ETKT_05 divide-event PNRs anchored after the status record");
-        var etktPlain = await protector.ProtectAsync(FeedType.ETKT, Parse(Path.Combine(samples, "ETKT", "ETKT.txt")), CancellationToken.None);
-        Check(etktPlain.Events.All(e => e.Decision != DetectionDecision.Anchor), "ETKT without divide-event PNRs has no anchor and is not rejected");
-        Check(etktPlain.Events.Any(e => e.Decision == DetectionDecision.MaskedByDefault) || etktPlain.Events.Any(e => e.Decision == DetectionDecision.Masked),
-            "ETKT protects its ticket and reference strings");
+        var pnrOutcome = await protector.ProtectAsync(FeedType.PNR, Parse(pnrSample), CancellationToken.None);
+        Check(pnrOutcome.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 1, "PNR.txt has exactly one anchored PNR");
+        Check(pnrOutcome.Events.Any(e => e.Decision == DetectionDecision.MaskedByDefault) && pnrOutcome.Events.Any(e => e.Decision == DetectionDecision.Masked),
+            "PNR.txt masks declared formats and unmatched strings");
         Console.WriteLine("PASS PNR anchors fail closed and unmatched strings are masked by default");
 
-        // R-002, WR-017: a malformed divide-event PNR at an optional ETKT anchor position dead-letters instead of being
-        // masked and published; so does a malformed PNR embedded in the ACI unresolved record reference.
-        string etkt05 = Path.Combine(samples, "ETKT", "ETKT_05.txt");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.ETKT, ParseEdited(etkt05, FeedType.ETKT, (fields, payload) =>
-        {
-            int status = fields.ToList().FindIndex(f => f.Value.Length == 8 && f.Value.All(char.IsAsciiDigit));
-            OverwriteFirst(payload, fields[status + 1], '-');
-        }), CancellationToken.None), "anchor position is not PNR-shaped", "a malformed ETKT divide-event PNR dead-letters");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.ACI, ParseEdited(aci, FeedType.ACI, (fields, payload) =>
-        {
-            var reference = fields.Last(f => f.Value.Length == 15 && f.Value[..9].All(char.IsAsciiDigit));
-            payload[Locate(payload, reference.Value) + 9] = (byte)'-';
-        }), CancellationToken.None), "embedded PNR", "a malformed PNR embedded in the ACI record reference dead-letters");
-        var aciOutcome = await protector.ProtectAsync(FeedType.ACI, Parse(aci), CancellationToken.None);
-        var aciFields = Parse(aci).Fields;
-        var referenceField = aciFields.Last(f => f.Value.Length == 15 && f.Value[..9].All(char.IsAsciiDigit));
-        Check(aciOutcome.Values[referenceField.Id][9..] == referenceField.Value[9..] && aciOutcome.Values[referenceField.Id][..9].All(c => c == '*'),
-            "ACI record reference: prefix masked, embedded PNR unchanged");
-        // R-011: an all-digit 15-digit number in the reference position is not a record reference; it is masked in full.
-        var digits = ParseEdited(aci, FeedType.ACI, (fields, payload) =>
-        {
-            var reference = fields.Last(f => f.Value.Length == 15 && f.Value[..9].All(char.IsAsciiDigit));
-            System.Text.Encoding.ASCII.GetBytes("378282246310005").CopyTo(payload, Locate(payload, reference.Value));
-        });
-        var digitsOutcome = await protector.ProtectAsync(FeedType.ACI, digits, CancellationToken.None);
-        var digitsField = digits.Fields.Single(f => f.Value == "378282246310005");
-        Check(digitsOutcome.Values[digitsField.Id].All(c => c is '*' or '#'), "a 15-digit number in the reference position is masked in full");
-        Console.WriteLine("PASS malformed optional and embedded PNRs dead-letter; the embedded ACI PNR is kept while its prefix is masked; an all-digit reference is masked in full");
+        // WR-020: a rejection after detection keeps its events and values, with the reason unchanged. A codec whose
+        // rebuild check fails stands in for a rebuild that differs outside the protected strings (WR-016).
+        var failingRebuild = FeedWorkflowRouter.Create(protector, _ => new RebuildRejectingCodec(new PnrDecoder()));
+        var afterDetection = await new FeedMessageProcessor(failingRebuild)
+            .ProcessAsync(FeedType.PNR, Guid.NewGuid(), "PNR.txt", File.ReadAllBytes(pnrSample), CancellationToken.None);
+        Check(!afterDetection.Published && afterDetection.Reason == RebuildRejectingCodec.Reason
+            && afterDetection.DetectionEvents is { Count: > 0 } kept && afterDetection.DetectionValues?.Count == kept.Count,
+            "a message dead-lettered after detection keeps its events and values, with the same reason");
+        Console.WriteLine("PASS a message dead-lettered after detection keeps its events and values for the detection log (WR-020)");
 
-        // WR-017: a protection that would change a PNR dead-letters. A declared format that matches the whole record
-        // reference wins over its keep and would mask the embedded PNR. (Whole-string anchors never reach protection.)
-        string scratch = Path.Combine(Path.GetTempPath(), "pnr-change-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(scratch);
-        try
-        {
-            string aciFile = Path.Combine(scratch, "aci.xml");
-            string valid = File.ReadAllText(Path.Combine(projectRoot, "src", "PresidioDemo.Core", "Configuration", "recognizers", "aci.xml"));
-            const string keepElement = "<keep name=\"unresolvedRecordReference\"";
-            Check(valid.Contains(keepElement, StringComparison.Ordinal), "aci.xml declares the unresolved record reference keep");
-            File.WriteAllText(aciFile, valid.Replace(keepElement,
-                "<format name=\"wholeReference\" entity=\"UNCLASSIFIED_IDENTIFIER\" score=\"0.95\" maskCharacter=\"*\"><pattern>\\d{9}\\w{6}</pattern></format>\n  " + keepElement));
-            var widened = new DetectingFeedProtector(new Dictionary<FeedType, FeedRecognizerSet>(sets) { [FeedType.ACI] = RecognizerConfiguration.LoadFile(aciFile, FeedType.ACI) });
-            widened.Configure();
-            await RejectAsync(() => widened.ProtectAsync(FeedType.ACI, Parse(aci), CancellationToken.None),
-                "Protection changed an embedded PNR", "a protection that would change the embedded ACI PNR dead-letters");
-            // WR-020: a rejection after detection keeps its events and values, with the reason unchanged.
-            var afterDetection = await new FeedMessageProcessor(FeedPipelineConfiguration.Load(recognizers).CreateRouter(widened))
-                .ProcessAsync(FeedType.ACI, Guid.NewGuid(), "ACI.txt", File.ReadAllBytes(aci), CancellationToken.None);
-            Check(!afterDetection.Published && afterDetection.Reason == "Protection changed an embedded PNR."
-                && afterDetection.DetectionEvents is { Count: > 0 } kept && afterDetection.DetectionValues?.Count == kept.Count,
-                "a message dead-lettered after detection keeps its events and values, with the same reason");
-            Console.WriteLine("PASS a message dead-lettered after detection keeps its events and values for the detection log (WR-020)");
-        }
-        finally
-        {
-            Directory.Delete(scratch, recursive: true);
-            // The bridge keeps one registry per feed, so restore the reviewed ACI recognizers for the checks that follow.
-            protector.Configure();
-        }
         // WR-020: a message rejected before detection has no events to log.
         var reviewed = new FeedMessageProcessor(FeedPipelineConfiguration.Load(recognizers).CreateRouter(protector));
-        foreach (var (feed, name, input) in new[]
-        {
-            (FeedType.Seats, "SEATS_02_Negative_Testing.txt", File.ReadAllBytes(Path.Combine(samples, "Seats", "SEATS_02_Negative_Testing.txt"))),
-            (FeedType.ACI, "truncated.bin", new byte[] { 0, 0, 0 }),
-        })
-        {
-            var before = await reviewed.ProcessAsync(feed, Guid.NewGuid(), name, input, CancellationToken.None);
-            Check(!before.Published && before.DetectionEvents is null && before.DetectionValues is null, name + ": rejected before detection, so nothing to log");
-        }
+        var before = await reviewed.ProcessAsync(FeedType.PNR, Guid.NewGuid(), "truncated.bin", new byte[] { 0, 0, 0 }, CancellationToken.None);
+        Check(!before.Published && before.DetectionEvents is null && before.DetectionValues is null, "truncated.bin: rejected before detection, so nothing to log");
         Console.WriteLine("PASS messages rejected before detection carry no events or values");
 
-        // R-004, R-006, R-009: JSON keys match regardless of case, reason text is scanned, a number nested under a
-        // personal-data key dead-letters, and a key the recognizer file does not declare is logged as ?.
-        var linkingCodec = FeedCodecRegistry.Create(FeedType.PnrLinking);
-        var json = linkingCodec.Parse(new FeedMessage(new FeedDelivery(FeedType.PnrLinking, Guid.NewGuid(), "fixture.bin", ""), Encoding.UTF8.GetBytes(
-            "[{\"PNROwner\":\"K7QX2M\",\"dob\":\"1985-03-12\",\"ReasonForLeaving\":\"REBOOKED, CONTACT MILLER/JORDAN\",\"contacts\":{\"jordan.miller@example.com\":\"HOME\"}}]")));
-        var jsonOutcome = await protector.ProtectAsync(FeedType.PnrLinking, json, CancellationToken.None);
-        string Value(string suffix) => jsonOutcome.Values[json.Fields.Single(f => f.Id.EndsWith(suffix, StringComparison.Ordinal)).Id];
-        Check(Value("/dob") == "[DATE_OF_BIRTH]", "a lower-case dob key is replaced, not kept as a timestamp");
-        var nested = linkingCodec.Parse(new FeedMessage(new FeedDelivery(FeedType.PnrLinking, Guid.NewGuid(), "fixture.bin", ""),
-            Encoding.UTF8.GetBytes("[{\"PNROwner\":\"K7QX2M\",\"DOB\":{\"Date\":\"1985-03-12\"}}]")));
-        var nestedOutcome = await protector.ProtectAsync(FeedType.PnrLinking, nested, CancellationToken.None);
-        Check(nestedOutcome.Values[nested.Fields.Single(f => f.Id.EndsWith("/DOB/Date", StringComparison.Ordinal)).Id] == "[DATE_OF_BIRTH]",
-            "a string nested under a personal-data key is protected by that key (R-012)");
-        Check(!Value("/ReasonForLeaving").Contains("MILLER", StringComparison.Ordinal) && Value("/ReasonForLeaving").StartsWith("REBOOKED, ", StringComparison.Ordinal),
-            "a name inside reason text is masked while the reason is kept");
-        Check(Value("/PNROwner") == "K7QX2M", "the PNR stays unchanged");
-        Check(jsonOutcome.Events.Single(e => e.Decision == DetectionDecision.MaskedByDefault).Key == "?", "an undeclared key is logged as ?");
-        var dynamicKey = jsonOutcome.Events.Single(e => e.Decision == DetectionDecision.MaskedByDefault);
-        Check(dynamicKey.SafePointer == "/0/?/?" && dynamicKey.Pointer == "/0/contacts/jordan.miller@example.com" && dynamicKey.Pattern == "/*/contacts/jordan.miller@example.com",
-            "a value-free pointer shows undeclared names as ? and keeps the array index; the full pointer keeps every name");
-        Check(jsonOutcome.Events.Single(e => e.Decision == DetectionDecision.Anchor).SafePointer == "/0/PNROwner", "a declared key keeps its name in the value-free pointer");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.PnrLinking, linkingCodec.Parse(new FeedMessage(new FeedDelivery(FeedType.PnrLinking, Guid.NewGuid(), "fixture.bin", ""),
-            Encoding.UTF8.GetBytes("[{\"PNROwner\":\"K7QX2M\",\"DOB\":{\"Year\":1985}}]"))), CancellationToken.None),
-            "number or boolean", "a number nested under a personal-data key dead-letters");
-        Console.WriteLine("PASS JSON keys ignore case, reason text is scanned, nested personal-data numbers dead-letter, undeclared keys log as ?");
-
-        // R-003: a recognizer pattern that times out in Presidio dead-letters instead of publishing unchecked text. This
-        // reconfigures the Seats registry, so it restores the reviewed configuration afterwards.
-        string slow = Path.Combine(Path.GetTempPath(), "slow-seats-" + Guid.NewGuid().ToString("N") + ".xml");
-        File.WriteAllText(slow, File.ReadAllText(Path.Combine(projectRoot, "src", "PresidioDemo.Core", "Configuration", "recognizers", "seats.xml"))
-            .Replace("<keep name=\"operational\">", "<format name=\"slowCheck\" entity=\"DEMO_CODE\"><pattern>(A|AA)+$</pattern></format>\n  <keep name=\"operational\">", StringComparison.Ordinal));
+        // R-003: a recognizer pattern that times out dead-letters instead of publishing unchecked text. This reconfigures
+        // the PNR registry, so it restores the reviewed configuration afterwards.
+        string slow = Path.Combine(Path.GetTempPath(), "slow-pnr-" + Guid.NewGuid().ToString("N") + ".xml");
+        File.WriteAllText(slow, File.ReadAllText(Path.Combine(recognizers, "pnr.xml"))
+            .Replace("<keep name=\"docsRecord\"", "<format name=\"slowCheck\" entity=\"DEMO_CODE\"><pattern>(A|AA)+$</pattern></format>\n  <keep name=\"docsRecord\"", StringComparison.Ordinal));
         try
         {
             var slowSets = sets.ToDictionary(pair => pair.Key, pair => pair.Value);
-            slowSets[FeedType.Seats] = RecognizerConfiguration.LoadFile(slow, FeedType.Seats);
+            slowSets[FeedType.PNR] = RecognizerConfiguration.LoadFile(slow, FeedType.PNR);
             var slowProtector = new DetectingFeedProtector(slowSets);
             slowProtector.Configure();
-            var seatsCodec = FeedCodecRegistry.Create(FeedType.Seats);
-            var seats = seatsCodec.Parse(new FeedMessage(new FeedDelivery(FeedType.Seats, Guid.NewGuid(), "fixture.bin", ""),
-                Encoding.UTF8.GetBytes("{\"UARecloc\":\"K7QX2M\",\"Note\":\"" + new string('A', 40) + "!\"}")));
-            await RejectAsync(() => slowProtector.ProtectAsync(FeedType.Seats, seats, CancellationToken.None),
-                "Local Presidio detection failed", "a Presidio pattern timeout dead-letters the message");
+            var slowInput = ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
+            {
+                var target = fields.First(f => f.Value.Length >= 30 && f.Value.All(c => c is >= ' ' and <= '~'));
+                Encoding.ASCII.GetBytes(new string('A', target.Value.Length - 1) + "!").CopyTo(payload, Locate(payload, target.Value));
+            });
+            await RejectAnyAsync(() => slowProtector.ProtectAsync(FeedType.PNR, slowInput, CancellationToken.None),
+                ["Local Presidio detection failed", "A recognizer pattern timed out"], "a pattern timeout dead-letters the message");
         }
         finally
         {
@@ -337,26 +209,26 @@ internal static class DetectingProtectorChecks
             protector.Configure();
         }
 
-        // V-12, W-017: the ACI passenger-association check is gone. Raw words such as numeric passenger IDs are never
-        // decoded or changed, so a message whose ID word differs is published with that word exactly as received.
-        var aciCodec = new AciDecoder();
-        var aciMessage = Message(aci, FeedType.ACI);
-        var aciEnvelope = FeedPayloadReader.Read(aciMessage);
-        var aciCandidates = XdrFeedDecoder.Candidates(aciCodec.Parse(aciMessage));
-        int nameEnd = aciCandidates.First(c => c.Value.Contains('/')).Offset + aciCandidates.First(c => c.Value.Contains('/')).Length;
-        int idWord = Enumerable.Range(0, aciEnvelope.Payload.Length / 4).Select(i => i * 4)
-            .First(o => o > nameEnd && !aciCandidates.Any(c => o + 4 > c.Offset - 4 && o < c.Offset + c.Length + 4) &&
-                BinaryPrimitives.ReadUInt32BigEndian(aciEnvelope.Payload.AsSpan(o, 4)) is > 1 and < 100_000_000);
-        byte[] mismatched = aciEnvelope.Payload.ToArray();
-        BinaryPrimitives.WriteUInt32BigEndian(mismatched.AsSpan(idWord, 4), BinaryPrimitives.ReadUInt32BigEndian(mismatched.AsSpan(idWord, 4)) + 1);
-        var mismatchMessage = new FeedMessage(aciMessage.Delivery, aciEnvelope.Serialize(mismatched));
-        var mismatchParsed = aciCodec.Parse(mismatchMessage);
-        var mismatchOutcome = await protector.ProtectAsync(FeedType.ACI, mismatchParsed, CancellationToken.None);
-        byte[] mismatchOutput = aciCodec.Serialize(mismatchParsed, mismatchOutcome.Values);
-        aciCodec.Validate(mismatchParsed, mismatchOutput);
-        Check(FeedPayloadReader.Read(new FeedMessage(aciMessage.Delivery, mismatchOutput)).Payload.AsSpan(idWord, 4).SequenceEqual(mismatched.AsSpan(idWord, 4)),
-            "ACI ID word published unchanged");
-        Console.WriteLine("PASS an ACI message with a changed passenger-ID word is published with the word unchanged (no association check)");
+        // V-12, W-017: raw words such as numeric IDs are never decoded or changed, so a message whose raw word differs is
+        // published with that word exactly as received.
+        var pnrCodec = new PnrDecoder();
+        var pnrMessage = Message(pnrSample, FeedType.PNR);
+        var pnrEnvelope = FeedPayloadReader.Read(pnrMessage);
+        var pnrCandidates = XdrFeedDecoder.Candidates(pnrCodec.Parse(pnrMessage));
+        int firstEnd = pnrCandidates[0].Offset + pnrCandidates[0].Length;
+        int rawWord = Enumerable.Range(0, pnrEnvelope.Payload.Length / 4).Select(i => i * 4)
+            .First(o => o > firstEnd && !pnrCandidates.Any(c => o + 4 > c.Offset - 4 && o < c.Offset + c.Length + 4) &&
+                BinaryPrimitives.ReadUInt32BigEndian(pnrEnvelope.Payload.AsSpan(o, 4)) is > 1 and < 100_000_000);
+        byte[] mismatched = pnrEnvelope.Payload.ToArray();
+        BinaryPrimitives.WriteUInt32BigEndian(mismatched.AsSpan(rawWord, 4), BinaryPrimitives.ReadUInt32BigEndian(mismatched.AsSpan(rawWord, 4)) + 1);
+        var mismatchMessage = new FeedMessage(pnrMessage.Delivery, pnrEnvelope.Serialize(mismatched));
+        var mismatchParsed = pnrCodec.Parse(mismatchMessage);
+        var mismatchOutcome = await protector.ProtectAsync(FeedType.PNR, mismatchParsed, CancellationToken.None);
+        byte[] mismatchOutput = pnrCodec.Serialize(mismatchParsed, mismatchOutcome.Values);
+        pnrCodec.Validate(mismatchParsed, mismatchOutput);
+        Check(FeedPayloadReader.Read(new FeedMessage(pnrMessage.Delivery, mismatchOutput)).Payload.AsSpan(rawWord, 4).SequenceEqual(mismatched.AsSpan(rawWord, 4)),
+            "PNR raw word published unchanged");
+        Console.WriteLine("PASS a PNR message with a changed raw word is published with the word unchanged");
 
         // V-09, WR-019: narrowing a format breaks parity with the frozen baseline before merge. This reconfigures the
         // PNR registry, so it runs last and restores the reviewed configuration afterwards.
@@ -426,7 +298,7 @@ internal static class DetectingProtectorChecks
     /// <summary>
     /// Returns the codec the decoded-text path uses for a feed.
     /// </summary>
-    private static IFeedCodec Codec(FeedType feed) => feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR ? FeedCodecRegistry.Create(feed) : FeedCodecRegistry.Create(feed);
+    private static IFeedCodec Codec(FeedType feed) => FeedCodecRegistry.Create(feed);
 
     /// <summary>
     /// Builds a message from a sample file.
@@ -457,15 +329,6 @@ internal static class DetectingProtectorChecks
     }
 
     /// <summary>
-    /// Replaces one character of a candidate's text in the payload.
-    /// </summary>
-    private static void Overwrite(byte[] payload, FeedField field, char from, char to)
-    {
-        int offset = Locate(payload, field.Value);
-        payload[offset + field.Value.IndexOf(from)] = (byte)to;
-    }
-
-    /// <summary>
     /// Replaces the first character of a candidate's text in the payload.
     /// </summary>
     private static void OverwriteFirst(byte[] payload, FeedField field, char to) => payload[Locate(payload, field.Value)] = (byte)to;
@@ -476,20 +339,20 @@ internal static class DetectingProtectorChecks
     private static int Locate(byte[] payload, string value) => payload.AsSpan().IndexOf(Encoding.ASCII.GetBytes(value));
 
     /// <summary>
-    /// Keeps the JSON layout of the original parse but uses edited field values, for anchor checks that never serialize.
-    /// </summary>
-    private static ParsedFeed StringLayout(ParsedFeed original, ParsedFeed edited) => new(edited.Fields, original.Layout);
-
-    /// <summary>
     /// Requires an InvalidDataException whose message contains the expected text.
     /// </summary>
-    private static async Task RejectAsync(Func<ValueTask<DetectionOutcome>> action, string expected, string label)
+    private static Task RejectAsync(Func<ValueTask<DetectionOutcome>> action, string expected, string label) => RejectAnyAsync(action, [expected], label);
+
+    /// <summary>
+    /// Requires an InvalidDataException whose message contains one of the expected texts.
+    /// </summary>
+    private static async Task RejectAnyAsync(Func<ValueTask<DetectionOutcome>> action, string[] expected, string label)
     {
         try
         {
             await action();
         }
-        catch (InvalidDataException ex) when (ex.Message.Contains(expected, StringComparison.Ordinal))
+        catch (InvalidDataException ex) when (expected.Any(text => ex.Message.Contains(text, StringComparison.Ordinal)))
         {
             Console.WriteLine("PASS " + label);
             return;
@@ -507,6 +370,50 @@ internal static class DetectingProtectorChecks
             throw new Exception(label);
         }
     }
+
+    #endregion
+}
+
+/// <summary>
+/// Wraps a real codec but fails its rebuild check, so a message is rejected after detection ran.
+/// </summary>
+/// <param name="inner">The codec that parses and rebuilds the message.</param>
+internal sealed class RebuildRejectingCodec(IFeedCodec inner) : IFeedCodec
+{
+
+    #region Fields and Constants
+
+    /// <summary>
+    /// The value-free reason the rebuild check gives.
+    /// </summary>
+    public const string Reason = "Fixture rebuild check failed.";
+
+    #endregion
+
+    #region Methods
+
+    /// <summary>
+    /// Parses the message with the wrapped codec.
+    /// </summary>
+    /// <param name="message">The complete input delivery and its retained message bytes.</param>
+    /// <returns>The wrapped codec's parse.</returns>
+    public ParsedFeed Parse(FeedMessage message) => inner.Parse(message);
+
+    /// <summary>
+    /// Rebuilds the message with the wrapped codec.
+    /// </summary>
+    /// <param name="original">The original parse.</param>
+    /// <param name="anonymizedFields">The protected values by field identifier.</param>
+    /// <returns>The rebuilt message.</returns>
+    public byte[] Serialize(ParsedFeed original, IReadOnlyDictionary<string, string> anonymizedFields) => inner.Serialize(original, anonymizedFields);
+
+    /// <summary>
+    /// Always rejects the rebuilt message.
+    /// </summary>
+    /// <param name="original">The original parse.</param>
+    /// <param name="serialized">The rebuilt message.</param>
+    /// <exception cref="InvalidDataException">Always.</exception>
+    public void Validate(ParsedFeed original, ReadOnlyMemory<byte> serialized) => throw new InvalidDataException(Reason);
 
     #endregion
 }

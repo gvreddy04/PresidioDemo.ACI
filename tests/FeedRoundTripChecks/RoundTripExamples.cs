@@ -80,37 +80,15 @@ internal static class RoundTripExamples
             examples.Add(new(feed, feed + "/diagnostic-dump", baseline.Sample, "Complete diagnostic dump", ".txt",
                 Diagnostic(baseline.Envelope.Payload)));
 
-            if (feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR)
+            // The generic codec has no field names, so the varied string is chosen by its shape: the first letters-only
+            // string (the PNR surname).
+            var parsed = codecFactory(feed).Parse(Message(feed, "example.bin", baseline.Envelope.Payload));
+            string current = parsed.Fields.First(field => field.Value.Length >= 4 && field.Value.All(char.IsAsciiLetterUpper)).Value;
+            foreach (string replacement in new[] { "", "REED", "STONE", "CARTER", "FOX", "WASHINGTON" })
             {
-                // The generic codec has no field names, so the varied string is chosen by its shape: the first passenger
-                // name (ACI), the 13-digit history sequence number (ETKT), the first letters-only string (PNR surname).
-                Func<string, bool> target = feed switch
-                {
-                    FeedType.ACI => value => value.Contains('/') && value.All(c => char.IsAsciiLetterUpper(c) || c == '/'),
-                    FeedType.ETKT => value => value.Length == 13 && value.All(char.IsAsciiDigit),
-                    _ => value => value.Length >= 4 && value.All(char.IsAsciiLetterUpper)
-                };
-                var parsed = codecFactory(feed).Parse(Message(feed, "example.bin", baseline.Envelope.Payload));
-                string current = parsed.Fields.First(field => target(field.Value)).Value;
-                string[] replacements = feed switch
-                {
-                    FeedType.ACI => ["", "REED/AVA", "COLE/JACK", "FOX/OLIVIA", "CARTER/EMMA", "BROOKS/MICHAEL"],
-                    FeedType.ETKT => ["", "1", "12", "123", "1234", "0161234567890", "0161234567890123456789"],
-                    _ => ["", "REED", "STONE", "CARTER", "FOX", "WASHINGTON"]
-                };
-                foreach (string replacement in replacements)
-                {
-                    // Build fixtures independently, rather than use the serializer under test.
-                    byte[] payload = ReplaceCountedString(baseline.Envelope.Payload, current, replacement);
-                    AddPayload(feed, baseline, $"binary-string-length-{replacement.Length}", "Binary width/padding variation", payload);
-                }
-            }
-            else
-            {
-                foreach (var (name, bytes) in JsonRoundTripExamples.Create(baseline.Envelope.Payload))
-                {
-                    AddPayload(feed, baseline, name, "JSON value/format variation", bytes);
-                }
+                // Build fixtures independently, rather than use the serializer under test.
+                byte[] payload = ReplaceCountedString(baseline.Envelope.Payload, current, replacement);
+                AddPayload(feed, baseline, $"binary-string-length-{replacement.Length}", "Binary width/padding variation", payload);
             }
         }
         return examples.AsReadOnly();

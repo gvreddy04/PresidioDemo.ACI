@@ -162,7 +162,7 @@
   <!-- Example: TOTAL FARE - USD412.50. -->
   <keep name="totalFare"><pattern>TOTAL FARE - [A-Z]{3}[0-9.]+</pattern></keep>
 
-  <!-- Built-ins: e-mail, IP address, card number and spaCy PERSON, as in aci.xml. -->
+  <!-- Built-ins: e-mail, IP address, card number and spaCy PERSON. -->
   <builtIn entity="EMAIL_ADDRESS" />
   <builtIn entity="IP_ADDRESS" />
   <builtIn entity="CREDIT_CARD" />

@@ -3,30 +3,14 @@ namespace PresidioDemo.Core.Models;
 #region Enumerations
 
 /// <summary>
-/// Identifies a supported feed route; declaration order preserves its existing numeric values.
+/// Identifies the supported feed route; the explicit value preserves its existing numeric value.
 /// </summary>
 public enum FeedType
 {
     /// <summary>
-    /// The ETKT binary feed route.
-    /// </summary>
-    ETKT,
-    /// <summary>
     /// The reviewed PNR binary feed route.
     /// </summary>
-    PNR,
-    /// <summary>
-    /// The PNR-Linking JSON array feed route.
-    /// </summary>
-    PnrLinking,
-    /// <summary>
-    /// The Seats JSON object feed route.
-    /// </summary>
-    Seats,
-    /// <summary>
-    /// The ACI binary feed route.
-    /// </summary>
-    ACI
+    PNR = 1
 }
 
 #endregion
@@ -67,11 +51,7 @@ public static class FeedCatalog
     /// <value>The reviewed definitions in their required declaration order.</value>
     public static IReadOnlyList<FeedDefinition> All { get; } = Array.AsReadOnly(new[]
         {
-        new FeedDefinition(FeedType.ETKT, "ETKT"),
-        new FeedDefinition(FeedType.PNR, "PNR"),
-        new FeedDefinition(FeedType.PnrLinking, "PNR-Linking"),
-        new FeedDefinition(FeedType.Seats, "Seats"),
-        new FeedDefinition(FeedType.ACI, "ACI")
+        new FeedDefinition(FeedType.PNR, "PNR")
     });
 
     #endregion

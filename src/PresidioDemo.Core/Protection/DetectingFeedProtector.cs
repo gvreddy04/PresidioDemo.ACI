@@ -133,7 +133,7 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     public async ValueTask<DetectionOutcome> ProtectAsync(FeedType feed, ParsedFeed parsed, CancellationToken cancellationToken)
     {
         var set = sets[feed];
-        bool binary = feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR;
+        bool binary = feed is FeedType.PNR;
         var candidates = binary ? parsed.Fields : JsonFeedParser.StringFields(parsed);
         var values = parsed.Fields.ToDictionary(field => field.Id, field => field.Value, StringComparer.Ordinal);
         var events = new DetectionEvent?[candidates.Count];

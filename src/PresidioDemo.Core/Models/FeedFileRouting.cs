@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace PresidioDemo.Core.Models;
 
 /// <summary>
-/// Chooses the feed for a sample or test file: by its feed folder, or else by a file name such as ACI_03.txt.
+/// Chooses the feed for a sample or test file: by its feed folder, or else by a file name such as PNR_02.txt.
 /// </summary>
 public static class FeedFileRouting
 {
@@ -13,7 +13,7 @@ public static class FeedFileRouting
     /// <summary>
     /// Returns the feed for a file path.
     /// </summary>
-    /// <param name="path">The file path, for example docs/sample-docs/PNR/PNR_02.txt or SEATS_02_Negative_Testing.txt.</param>
+    /// <param name="path">The file path, for example docs/sample-docs/PNR/PNR_02.txt or PNR_03.bin.</param>
     /// <returns>The supported feed route.</returns>
     /// <exception cref="InvalidDataException">Neither the folder nor the file name identifies a feed.</exception>
     public static FeedType FromPath(string path)
@@ -28,12 +28,8 @@ public static class FeedFileRouting
         route = Regex.Replace(route, "-[0-9]+$", "", RegexOptions.CultureInvariant);
         return route switch
         {
-            "ACI" => FeedType.ACI,
             "PNR" => FeedType.PNR,
-            "PNR-LINKING" => FeedType.PnrLinking,
-            "SEATS" => FeedType.Seats,
-            "ETKT" or "TKT" => FeedType.ETKT,
-            _ => throw new InvalidDataException($"Cannot route {Path.GetFileName(path)}: put it in a feed folder (ACI, ETKT, PNR, PNR-Linking, Seats) or name it after the feed.")
+            _ => throw new InvalidDataException($"Cannot route {Path.GetFileName(path)}: put it in the PNR folder or name it after the feed.")
         };
     }
 

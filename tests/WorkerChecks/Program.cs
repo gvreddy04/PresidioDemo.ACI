@@ -29,8 +29,8 @@ var (local, localName) = EnvironmentConfiguration.Build(settingsFile, noVariable
 Require(localName == "Local" && local["Solace:Host"] == "tcp://localhost:55555", "without DOTNET_ENVIRONMENT the file's CurrentEnvironment (Local) applies");
 var (dev, devName) = EnvironmentConfiguration.Build(settingsFile, name => name == EnvironmentConfiguration.EnvironmentVariable ? "Dev" : null);
 Require(devName == "Dev" && dev["Solace:Host"]!.StartsWith("tcps://") && dev["Solace:Vpn"] == "dev-demoair-vpn", "DOTNET_ENVIRONMENT=Dev selects the Dev section");
-Require(local["Messaging:Routes:2:Input"] == "q.pnr.raw" && dev["Messaging:Routes:2:Input"] == "DEMOAIR.OPS.PIIDEMO.COS.PNR.MI.1"
-    && dev["Messaging:Routes:3:Feed"] is null && dev["Messaging:Transport"] == "Solace",
+Require(local["Messaging:Routes:0:Input"] == "q.pnr.raw" && dev["Messaging:Routes:0:Input"] == "DEMOAIR.OPS.PIIDEMO.COS.PNR.MI.1"
+    && dev["Messaging:Routes:1:Feed"] is null && dev["Messaging:Transport"] == "Solace",
     "each environment lists its own routes; shared Messaging settings still apply");
 Reject(() => EnvironmentConfiguration.Build(settingsFile, name => name == EnvironmentConfiguration.EnvironmentVariable ? "QA" : null),
     "an environment without a section stops startup");
@@ -47,16 +47,21 @@ finally { Environment.SetEnvironmentVariable("Solace__Host", null); }
 
 // Settings validation
 var messaging = MessagingOptions.Load(local);
-Require(messaging.Transport == "Solace" && FeedWorkerService.Routes(messaging).Count == FeedCatalog.All.Count, "the Local settings route every feed");
-Require(FeedWorkerService.Routes(MessagingOptions.Load(dev)).Keys.ToHashSet().SetEquals([FeedType.ACI, FeedType.ETKT, FeedType.PNR]),
-    "Dev routes only the feeds its broker carries; the other feeds are not consumed");
+Require(messaging.Transport == "Solace" && FeedWorkerService.Routes(messaging).Keys.SequenceEqual([FeedType.PNR]), "the Local settings route the PNR feed only");
+var localPnr = FeedWorkerService.Routes(messaging)[FeedType.PNR];
+Require(localPnr.Input == "q.pnr.raw" && localPnr.Output == "airline/pnr/protected" && localPnr.DeadLetter == "q.pnr.dlq",
+    "the Local PNR route keeps its queue, topic and dead-letter names");
+var devRoutes = FeedWorkerService.Routes(MessagingOptions.Load(dev));
+Require(devRoutes.Keys.SequenceEqual([FeedType.PNR]) && devRoutes[FeedType.PNR].Input == "DEMOAIR.OPS.PIIDEMO.COS.PNR.MI.1"
+    && devRoutes[FeedType.PNR].Output == "demoair/ops/piidemo/pnr/protected" && devRoutes[FeedType.PNR].DeadLetter == "DEMOAIR.OPS.PIIDEMO.COS.PNR.DLQ.1",
+    "Dev routes the PNR feed only, with its queue, topic and dead-letter names");
 Require(SolaceOptions.Load(local, runRoot, password).ProvisionQueues && !SolaceOptions.Load(dev, runRoot, password).ProvisionQueues,
     "Local and Dev Solace sections validate; only Local creates queues");
 var onePnr = MessagingOptions.Load(new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Feed", "pnr")]).Build());
 Require(onePnr.Routes.Count == 1 && FeedWorkerService.Routes(onePnr).Keys.Single() == FeedType.PNR,
     "Messaging:Feed keeps only that feed's route, so one service runs one feed");
-var oneDevAci = MessagingOptions.Load(new ConfigurationBuilder().AddConfiguration(dev).AddInMemoryCollection([new("Messaging:Feed", "ACI")]).Build());
-Require(oneDevAci.Routes.Single().Input == "DEMOAIR.OPS.PIIDEMO.COS.ACI.MI.1", "Messaging:Feed selects one route in Dev too");
+var oneDevPnr = MessagingOptions.Load(new ConfigurationBuilder().AddConfiguration(dev).AddInMemoryCollection([new("Messaging:Feed", "PNR")]).Build());
+Require(oneDevPnr.Routes.Single().Input == "DEMOAIR.OPS.PIIDEMO.COS.PNR.MI.1", "Messaging:Feed selects one route in Dev too");
 RejectMessaging("Messaging:Feed", "IND", "Messaging:Feed without a route is rejected");
 Require(MessagingOptions.Load(local).ConsumersPerTask == 1, "one consumer per feed is the default");
 RejectMessaging("Messaging:ConsumersPerTask", "0", "zero consumers per task is rejected");
@@ -77,13 +82,16 @@ RejectSolace("ValidateCertificate", "false", "tcps:// without certificate valida
 RejectSolace("Password", "secret", "a password in the settings is rejected as an unknown key");
 RejectMessaging("Messaging:Transport", "", "a missing transport is rejected");
 RejectMessaging("Messaging:MaxDeliveries", "0", "MaxDeliveries below 1 is rejected");
-RejectMessaging("Messaging:Routes:1:Input", "q.aci.raw", "two feeds sharing a queue are rejected");
+var sharedQueue = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Routes:1:Feed", "PNR-2"),
+    new("Messaging:Routes:1:Input", "q.pnr.raw"), new("Messaging:Routes:1:Output", "airline/pnr-2/protected"), new("Messaging:Routes:1:DeadLetter", "q.pnr-2.dlq")]).Build();
+Reject(() => MessagingOptions.Load(sharedQueue), "two routes sharing a queue are rejected");
 RejectMessaging("Messaging:Routes:0:Output", "airline/>", "wildcard output topics are rejected");
-RejectMessaging("Messaging:Routes:0:DeadLetter", "q.aci.raw", "a dead-letter queue equal to the input is rejected");
+RejectMessaging("Messaging:Routes:0:DeadLetter", "q.pnr.raw", "a dead-letter queue equal to the input is rejected");
 RejectMessaging("Messaging:Routes:0:Typo", "x", "unknown route keys are rejected");
-var duplicateFeed = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Routes:4:Feed", "ACI")]).Build();
+var duplicateFeed = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Routes:1:Feed", "PNR"),
+    new("Messaging:Routes:1:Input", "q.pnr-2.raw"), new("Messaging:Routes:1:Output", "airline/pnr-2/protected"), new("Messaging:Routes:1:DeadLetter", "q.pnr-2.dlq")]).Build();
 Reject(() => FeedWorkerService.Routes(MessagingOptions.Load(duplicateFeed)), "a feed with two routes is rejected");
-var unknownFeed = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Routes:4:Feed", "IND")]).Build();
+var unknownFeed = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Messaging:Routes:0:Feed", "IND")]).Build();
 Reject(() => FeedWorkerService.Routes(MessagingOptions.Load(unknownFeed)), "a route for a feed without a codec is rejected");
 Require(PresidioOptions.Load(local, runRoot).PythonEnvironment is null, "without Presidio:PythonEnvironment the project's src/.venv applies");
 string venv = Directory.CreateDirectory(Path.Combine(runRoot, "venv")).FullName;
@@ -135,62 +143,62 @@ Require(PresidioOptions.Load(local, runRoot).RecognizerDirectory == Path.GetFull
 var options = MessagingOptions.Load(local);
 options.PublishRetryDelayMs = 20;
 options.CopyHeaders = ["sourceSystem"];
-var seats = options.Routes.Single(r => r.Feed == "Seats");
+var pnr = options.Routes.Single(r => r.Feed == "PNR");
 byte[] payload = Encoding.UTF8.GetBytes("{\"x\":\"y\"}");
 var headers = new Dictionary<string, string> { ["sourceSystem"] = "res-host", ["internal"] = "drop-me" };
 
 {
     var (broker, workflows) = Setup();
-    string id = broker.Send(seats.Input, payload, headers, "corr-1");
-    await RunUntil(broker, workflows, () => broker.Pending(seats.Input) == 0);
-    var output = broker.PublishedTo(seats.Output).Single();
+    string id = broker.Send(pnr.Input, payload, headers, "corr-1");
+    await RunUntil(broker, workflows, () => broker.Pending(pnr.Input) == 0);
+    var output = broker.PublishedTo(pnr.Output).Single();
     Require(output.Destination.Kind == DestinationKind.Topic && output.Payload.Span.SequenceEqual(payload), "validated output goes to the feed's output topic");
-    Require(output.MessageId == FeedWorker.TransactionId(seats.Input, id).ToString("N") && output.CorrelationId == "corr-1",
+    Require(output.MessageId == FeedWorker.TransactionId(pnr.Input, id).ToString("N") && output.CorrelationId == "corr-1",
         "output carries a transaction ID derived from the broker message ID, and the correlation ID");
-    Require(output.Headers.Count == 2 && output.Headers["sourceSystem"] == "res-host" && output.Headers[MessageHeaders.Feed] == "Seats",
+    Require(output.Headers.Count == 2 && output.Headers["sourceSystem"] == "res-host" && output.Headers[MessageHeaders.Feed] == "PNR",
         "only allowed headers are copied, plus the feed name");
     Require(workflows.Names.Single().EndsWith(".bin"), "messages without a payload-format header are processed as raw payloads");
 }
 {
     var (broker, workflows) = Setup();
     broker.FailNextPublishes = 2;
-    broker.Send(seats.Input, payload);
-    await RunUntil(broker, workflows, () => broker.Pending(seats.Input) == 0);
-    Require(broker.PublishAttempts == 3 && broker.PublishedTo(seats.Output).Count == 1, "a broker outage is retried until the output is confirmed");
+    broker.Send(pnr.Input, payload);
+    await RunUntil(broker, workflows, () => broker.Pending(pnr.Input) == 0);
+    Require(broker.PublishAttempts == 3 && broker.PublishedTo(pnr.Output).Count == 1, "a broker outage is retried until the output is confirmed");
 }
 {
     var (broker, workflows) = Setup();
     workflows.BlockNext = true;
-    string id = broker.Send(seats.Input, payload);
+    string id = broker.Send(pnr.Input, payload);
     await RunUntil(broker, workflows, () => workflows.Blocked);
-    Require(broker.Pending(seats.Input) == 1 && broker.PublishedTo(seats.Output).Count == 0, "a crash during processing leaves the message unacknowledged");
-    await RunUntil(broker, workflows, () => broker.Pending(seats.Input) == 0);
-    var output = broker.PublishedTo(seats.Output).Single();
-    Require(output.MessageId == FeedWorker.TransactionId(seats.Input, id).ToString("N") && workflows.Deliveries.Last() == 2,
+    Require(broker.Pending(pnr.Input) == 1 && broker.PublishedTo(pnr.Output).Count == 0, "a crash during processing leaves the message unacknowledged");
+    await RunUntil(broker, workflows, () => broker.Pending(pnr.Input) == 0);
+    var output = broker.PublishedTo(pnr.Output).Single();
+    Require(output.MessageId == FeedWorker.TransactionId(pnr.Input, id).ToString("N") && workflows.Deliveries.Last() == 2,
         "the redelivered message is processed again under the same transaction ID");
 }
 {
     var (broker, workflows) = Setup(maxDeliveries: 1);
     workflows.BlockNext = true;
-    broker.Send(seats.Input, payload);
+    broker.Send(pnr.Input, payload);
     await RunUntil(broker, workflows, () => workflows.Blocked);
-    await RunUntil(broker, workflows, () => broker.Pending(seats.Input) == 0);
-    var rejected = broker.PublishedTo(seats.DeadLetter).Single();
+    await RunUntil(broker, workflows, () => broker.Pending(pnr.Input) == 0);
+    var rejected = broker.PublishedTo(pnr.DeadLetter).Single();
     Require(rejected.Destination.Kind == DestinationKind.Queue && rejected.Headers[MessageHeaders.RejectReason].Contains("Exceeded 1 deliveries"),
         "a message delivered more than MaxDeliveries times is dead-lettered without processing");
 }
 {
     var (broker, workflows) = Setup();
     workflows.RejectNext = true;
-    broker.Send(seats.Input, payload, new Dictionary<string, string> { [MessageHeaders.PayloadFormat] = FeedWorker.MqExportFormat });
-    broker.Send(seats.Input, payload, new Dictionary<string, string> { [MessageHeaders.PayloadFormat] = "xml" });
-    await RunUntil(broker, workflows, () => broker.Pending(seats.Input) == 0);
-    var dead = broker.PublishedTo(seats.DeadLetter);
+    broker.Send(pnr.Input, payload, new Dictionary<string, string> { [MessageHeaders.PayloadFormat] = FeedWorker.MqExportFormat });
+    broker.Send(pnr.Input, payload, new Dictionary<string, string> { [MessageHeaders.PayloadFormat] = "xml" });
+    await RunUntil(broker, workflows, () => broker.Pending(pnr.Input) == 0);
+    var dead = broker.PublishedTo(pnr.DeadLetter);
     Require(workflows.Names.Single().EndsWith(".txt"), "payload-format mq-export is processed as an IBM MQ export");
     Require(dead.Count == 2 && dead[0].Payload.Span.SequenceEqual(payload) && dead[0].Headers[MessageHeaders.RejectReason] == "Fixture rejection." &&
         dead[0].Headers[MessageHeaders.PayloadFormat] == FeedWorker.MqExportFormat, "rejected input goes to the dead-letter queue with its original bytes, reason and format");
     Require(dead[1].Headers[MessageHeaders.RejectReason].Contains("Unsupported"), "an unknown payload format is dead-lettered");
-    Require(broker.PublishedTo(seats.Output).Count == 0, "rejected input is never published to the output topic");
+    Require(broker.PublishedTo(pnr.Output).Count == 0, "rejected input is never published to the output topic");
 }
 {
     // Two consumers on one queue, as Messaging:ConsumersPerTask=2 runs them: while one is still processing,
@@ -199,18 +207,18 @@ var headers = new Dictionary<string, string> { ["sourceSystem"] = "res-host", ["
     var processor = new FeedMessageProcessor(new FeedWorkflowRouter(FeedCatalog.All.Select(f => workflows.For(f.Type))));
     using var stop = new CancellationTokenSource();
     var running = Enumerable.Range(0, 2)
-        .Select(_ => new FeedWorker(FeedType.Seats, seats, options, broker, broker, processor, NullLogger.Instance).RunAsync(stop.Token)).ToArray();
+        .Select(_ => new FeedWorker(FeedType.PNR, pnr, options, broker, broker, processor, NullLogger.Instance).RunAsync(stop.Token)).ToArray();
     workflows.BlockNext = true;
-    broker.Send(seats.Input, payload);
+    broker.Send(pnr.Input, payload);
     await WaitFor(() => workflows.Blocked, "the first consumer to start processing");
-    broker.Send(seats.Input, payload);
-    await WaitFor(() => broker.PublishedTo(seats.Output).Count == 1, "the second consumer to publish");
-    Require(workflows.Blocked && broker.Pending(seats.Input) == 1, "with two consumers, one message completes while the other is still processing");
+    broker.Send(pnr.Input, payload);
+    await WaitFor(() => broker.PublishedTo(pnr.Output).Count == 1, "the second consumer to publish");
+    Require(workflows.Blocked && broker.Pending(pnr.Input) == 1, "with two consumers, one message completes while the other is still processing");
     workflows.Release();
-    await WaitFor(() => broker.Pending(seats.Input) == 0, "the first consumer to finish");
+    await WaitFor(() => broker.Pending(pnr.Input) == 0, "the first consumer to finish");
     stop.Cancel();
     await Task.WhenAll(running);
-    Require(broker.PublishedTo(seats.Output).Count == 2, "both messages are published once the first consumer finishes");
+    Require(broker.PublishedTo(pnr.Output).Count == 2, "both messages are published once the first consumer finishes");
 }
 Directory.Delete(runRoot, recursive: true);
 Console.WriteLine("All worker checks passed.");
@@ -225,11 +233,11 @@ Console.WriteLine("All worker checks passed.");
     return (new InMemoryMessageBroker(), new FixtureWorkflows());
 }
 
-// Runs the Seats worker until the condition holds, then stops it as a crash or shutdown would.
+// Runs the PNR worker until the condition holds, then stops it as a crash or shutdown would.
 async Task RunUntil(InMemoryMessageBroker broker, FixtureWorkflows workflows, Func<bool> condition)
 {
     using var stop = new CancellationTokenSource();
-    var worker = new FeedWorker(FeedType.Seats, seats, options, broker, broker,
+    var worker = new FeedWorker(FeedType.PNR, pnr, options, broker, broker,
         new FeedMessageProcessor(new FeedWorkflowRouter(FeedCatalog.All.Select(f => workflows.For(f.Type)))), NullLogger.Instance);
     var running = worker.RunAsync(stop.Token);
     var limit = DateTime.UtcNow.AddSeconds(20);

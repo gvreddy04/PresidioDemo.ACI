@@ -85,8 +85,8 @@ public static class SampleFiles
     /// Returns whether a feed uses the binary XDR transport.
     /// </summary>
     /// <param name="feed">The feed route.</param>
-    /// <returns>True for ACI, ETKT and PNR.</returns>
-    public static bool IsBinary(FeedType feed) => feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR;
+    /// <returns>True for PNR.</returns>
+    public static bool IsBinary(FeedType feed) => feed is FeedType.PNR;
 
     /// <summary>
     /// Returns the production samples (all samples except the negative tests), in ordinal order.

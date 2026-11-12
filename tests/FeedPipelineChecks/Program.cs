@@ -62,32 +62,30 @@ static async Task CheckScheduling(IFeedProtector protector, byte[] input)
     {
         using (var release = new ManualResetEventSlim())
         {
-            var router = FeedWorkflowRouter.Create(protector, feed => feed == FeedType.ACI ? new BlockingTestCodec(started, release) : new TestOnlyCodec());
+            var router = FeedWorkflowRouter.Create(protector, _ => new BlockingTestCodec(started, release));
             var broker = new InMemoryMessageBroker();
             var options = TestMessaging();
             using (var cancellation = new CancellationTokenSource())
             {
-                Task aci = TestWorker(FeedType.ACI, options, broker, router).RunAsync(cancellation.Token);
-                Task seats = TestWorker(FeedType.Seats, options, broker, router).RunAsync(cancellation.Token);
+                Task pnr = TestWorker(FeedType.PNR, options, broker, router).RunAsync(cancellation.Token);
                 try
                 {
-                    broker.Send("in.ACI", input);
+                    broker.Send("in.PNR", input);
                     await Wait(() => started.IsSet);
-                    broker.Send("in.ACI", input);
-                    broker.Send("in.Seats", input);
-                    await Wait(() => broker.PublishedTo("out/Seats").Count == 1);
-                    Check(broker.PublishedTo("out/ACI").Count == 0, "Slow feed was not blocked.");
-                    Check(broker.Pending("in.ACI") == 2, "Same feed ran concurrently.");
-                    Console.WriteLine("PASS fast feed delivers while another feed is blocked; only one active message per feed");
+                    broker.Send("in.PNR", input);
+                    await Task.Delay(200);
+                    Check(broker.PublishedTo("out/PNR").Count == 0, "Blocked message was published.");
+                    Check(broker.Pending("in.PNR") == 2, "One worker ran two messages concurrently.");
+                    Console.WriteLine("PASS one worker processes one active message at a time");
                     cancellation.Cancel();
                     await Task.Delay(100);
-                    Check(!aci.IsCompleted, "Worker returned before draining active work.");
+                    Check(!pnr.IsCompleted, "Worker returned before draining active work.");
                     release.Set();
-                    await Task.WhenAll(aci, seats);
-                    Check(broker.Pending("in.ACI") == 2 && broker.PublishedTo("out/ACI").Count == 0, "Interrupted message was acknowledged or published.");
+                    await pnr;
+                    Check(broker.Pending("in.PNR") == 2 && broker.PublishedTo("out/PNR").Count == 0, "Interrupted message was acknowledged or published.");
                     Console.WriteLine("PASS shutdown drains active work before Python disposal and leaves interrupted input unacknowledged for redelivery");
                 }
-                finally { cancellation.Cancel(); release.Set(); await Task.WhenAll(aci, seats); }
+                finally { cancellation.Cancel(); release.Set(); await pnr; }
             }
         }
     }
@@ -97,7 +95,6 @@ bool started = false;
 try
 {
     FeedTransactionLogChecks.Run();
-    JsonCodecChecks.Run(projectRoot);
     await NoAnonymizationRoundTripChecks.RunAsync(projectRoot, Path.Combine(docsRoot, "round-trip-checks"));
     PythonHost.Start();
     started = true;
@@ -106,7 +103,7 @@ try
     var protector = new FixtureProtector();
     var codec = new TestOnlyCodec();
     byte[] input = codec.CreateFixture();
-    var metadata = new FeedDelivery(FeedType.ACI, Guid.NewGuid(), "fixture.bin", "test-only");
+    var metadata = new FeedDelivery(FeedType.PNR, Guid.NewGuid(), "fixture.bin", "test-only");
     var parsed = codec.Parse(new(metadata, input));
     byte[] unchanged = codec.Serialize(parsed, parsed.Fields.ToDictionary(field => field.Id, field => field.Value));
     Check(input.AsSpan().SequenceEqual(unchanged), "Unchanged fixture failed its exact-byte round trip.");
@@ -118,12 +115,12 @@ try
     var options = TestMessaging();
     using (var cancellation = new CancellationTokenSource())
     {
-        Task running = TestWorker(FeedType.ACI, options, broker, router).RunAsync(cancellation.Token);
+        Task running = TestWorker(FeedType.PNR, options, broker, router).RunAsync(cancellation.Token);
         try
         {
-            broker.Send("in.ACI", input);
-            await Wait(() => broker.PublishedTo("out/ACI").Count == 1 && broker.Pending("in.ACI") == 0);
-            byte[] output = broker.PublishedTo("out/ACI").Single().Payload.ToArray();
+            broker.Send("in.PNR", input);
+            await Wait(() => broker.PublishedTo("out/PNR").Count == 1 && broker.Pending("in.PNR") == 0);
+            byte[] output = broker.PublishedTo("out/PNR").Single().Payload.ToArray();
             var rebuilt = codec.Parse(new(metadata, output));
             var values = rebuilt.Fields.Select(field => field.Value).ToArray();
             Check(values[0] == "K7QX2M", "PNR changed.");
@@ -137,18 +134,18 @@ try
 
             byte[] unknown = (byte[])input.Clone();
             "RULE"u8.CopyTo(unknown);
-            broker.Send("in.ACI", unknown);
-            await Wait(() => broker.PublishedTo("dlq.ACI").Count == 1 && broker.Pending("in.ACI") == 0);
-            var rejected = broker.PublishedTo("dlq.ACI").Single();
+            broker.Send("in.PNR", unknown);
+            await Wait(() => broker.PublishedTo("dlq.PNR").Count == 1 && broker.Pending("in.PNR") == 0);
+            var rejected = broker.PublishedTo("dlq.PNR").Single();
             Check(rejected.Payload.Span.SequenceEqual(unknown) && rejected.Headers.ContainsKey(MessageHeaders.RejectReason), "Rejected input was not preserved in the dead-letter queue.");
-            Check(broker.PublishedTo("out/ACI").Count == 1, "Unknown-field input was published.");
+            Check(broker.PublishedTo("out/PNR").Count == 1, "Unknown-field input was published.");
             Console.WriteLine("PASS a protection failure rejects the entire message to the dead-letter queue without output");
 
             byte[] extra = [.. input, 0x00];
-            broker.Send("in.ACI", extra);
-            await Wait(() => broker.PublishedTo("dlq.ACI").Count == 2 && broker.Pending("in.ACI") == 0);
-            Check(broker.PublishedTo("dlq.ACI")[1].Payload.Span.SequenceEqual(extra), "Failed input was not preserved in the dead-letter queue.");
-            Check(broker.PublishedTo("out/ACI").Count == 1, "Partial parse was published.");
+            broker.Send("in.PNR", extra);
+            await Wait(() => broker.PublishedTo("dlq.PNR").Count == 2 && broker.Pending("in.PNR") == 0);
+            Check(broker.PublishedTo("dlq.PNR")[1].Payload.Span.SequenceEqual(extra), "Failed input was not preserved in the dead-letter queue.");
+            Check(broker.PublishedTo("out/PNR").Count == 1, "Partial parse was published.");
             Console.WriteLine("PASS entire-message parsing rejects trailing bytes and keeps the failed input");
         }
         finally { cancellation.Cancel(); await running; }
@@ -279,7 +276,7 @@ sealed class TestOnlyCodec : IFeedCodec
     /// <exception cref="InvalidDataException">The supplied message, field set or configuration violates the reviewed processing contract.</exception>
     public void Validate(ParsedFeed original, ReadOnlyMemory<byte> rebuilt)
     {
-        var delivery = new FeedDelivery(FeedType.ACI, Guid.Empty, "fixture.bin", "test-only");
+        var delivery = new FeedDelivery(FeedType.PNR, Guid.Empty, "fixture.bin", "test-only");
         var check = Parse(new(delivery, rebuilt));
         if (check.Fields.Count != original.Fields.Count || check.Fields[0].Value != original.Fields[0].Value)
         {

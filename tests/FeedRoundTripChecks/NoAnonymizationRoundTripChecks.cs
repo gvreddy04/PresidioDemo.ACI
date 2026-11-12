@@ -50,13 +50,9 @@ public static class NoAnonymizationRoundTripChecks
                 foreach (var example in examples)
                 {
                     var codec = Codec(example.Feed);
-                    if ((example.Feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR) && codec is not XdrFeedDecoder)
+                    if (codec is not XdrFeedDecoder)
                     {
                         throw new Exception("Binary round trips must exercise the generic XDR codec.");
-                    }
-                    if ((example.Feed is FeedType.PnrLinking or FeedType.Seats) && codec is not JsonFeedParser)
-                    {
-                        throw new Exception("Default JSON round trips must exercise the shared System.Text.Json codec.");
                     }
                     byte[] expected = example.Bytes.ToArray();
                     var firstMessage = RoundTripExamples.Message(example.Feed, "case" + example.Extension, example.Bytes);
@@ -116,10 +112,6 @@ public static class NoAnonymizationRoundTripChecks
                 {
                     var baseline = examples.First(example => example.Feed == feed.Type && example.Category == "Supplied raw payload");
                     byte[] payload = baseline.Bytes;
-                    if (feed.Type is FeedType.Seats or FeedType.PnrLinking)
-                    {
-                        payload = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(payload).TrimEnd());
-                    }
                     foreach (var invalid in new[] { (Name: "truncated-payload", Bytes: payload[..^1]),
                         (Name: "trailing-garbage", Bytes: payload.Concat(new byte[] { 0x7F }).ToArray()) })
                     {

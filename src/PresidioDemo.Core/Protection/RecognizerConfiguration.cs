@@ -98,7 +98,7 @@ public sealed record BuiltInEntity(string Entity, DetectionAction Action, char M
 /// <param name="After">The format or keep name the PNR follows, or null.</param>
 /// <param name="Before">The format or keep name the PNR precedes, or null.</param>
 /// <param name="Offset">How many candidates away from the first neighbour match the PNR sits.</param>
-/// <param name="Optional">Whether the anchor may be absent, as with ETKT divide-event PNRs. An optional position that
+/// <param name="Optional">Whether the anchor may be absent, as with a PNR that only some messages carry. An optional position that
 /// holds a value matching no keep or format is a malformed PNR and dead-letters the message.</param>
 /// <param name="Keys">JSON property names that hold a PNR.</param>
 /// <param name="Within">The keep whose strings embed a PNR, or null.</param>
@@ -193,7 +193,7 @@ public static class RecognizerConfiguration
     #region Methods
 
     /// <summary>
-    /// Returns the file name of a feed's recognizer XML, such as <c>pnr-linking.xml</c>.
+    /// Returns the file name of a feed's recognizer XML, such as <c>pnr.xml</c>.
     /// </summary>
     /// <param name="feed">The feed route.</param>
     /// <returns>The file name.</returns>
@@ -254,7 +254,7 @@ public static class RecognizerConfiguration
     /// <returns>The validated set.</returns>
     private static FeedRecognizerSet Parse(XElement root, FeedType feed, string file)
     {
-        bool binary = feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR;
+        bool binary = feed is FeedType.PNR;
         Require(root.Name.LocalName == "recognizers", file, "root must be <recognizers>");
         Attributes(root, file, "feed", "threshold", "defaultMaskCharacter");
         Require(root.Attribute("feed")?.Value == FeedCatalog.Get(feed).FolderName, file, "feed attribute must be " + FeedCatalog.Get(feed).FolderName);

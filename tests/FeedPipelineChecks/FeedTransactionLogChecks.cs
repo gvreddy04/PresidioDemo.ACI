@@ -17,12 +17,12 @@ static class FeedTransactionLogChecks
     public static void Run()
     {
         {
-            var delivery = new FeedDelivery(FeedType.Seats, Guid.NewGuid(), "same-name.bin", "fixture");
+            var delivery = new FeedDelivery(FeedType.PNR, Guid.NewGuid(), "same-name.bin", "fixture");
             var input = new FeedMessage(delivery, Encoding.UTF8.GetBytes("{\"Name\":\"Emily Carter\"}"));
             var result = new FeedWorkflowResult(Encoding.UTF8.GetBytes("{\"Name\":\"[PERSON]\"}"),
                 [new("/Name", "/Name", "Emily Carter")], [new("/Name", "/Name", "[PERSON]")]);
             // The harness passes the values-mode detection block; a fictional one is enough to check its place.
-            string block = "Seats 0 DETECTION PUBLISHED strings=1 pii=1 non-pii=0 review=0" + Environment.NewLine + "  PII fields (changed)" + Environment.NewLine
+            string block = "PNR 0 DETECTION PUBLISHED strings=1 pii=1 non-pii=0 review=0" + Environment.NewLine + "  PII fields (changed)" + Environment.NewLine
                 + "    \"/Name\"  \"Emily Carter\" -> \"[PERSON]\"  format=name entity=PERSON score=0.90 decision=replaced" + Environment.NewLine;
             string text = FeedLoggers.Format(input, result, null, block);
             string[] sections = text.Split("AFTER ANONYMIZATION");

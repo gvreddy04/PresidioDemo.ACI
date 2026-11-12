@@ -19,11 +19,7 @@ public static class FeedCodecRegistry
     /// <returns>The codec.</returns>
     public static IFeedCodec Create(FeedType feed) => feed switch
     {
-        FeedType.ACI => new AciDecoder(),
-        FeedType.ETKT => new EtktDecoder(),
         FeedType.PNR => new PnrDecoder(),
-        FeedType.PnrLinking => new PnrLinkingParser(),
-        FeedType.Seats => new SeatsParser(),
         _ => throw new InvalidDataException("No codec is registered for this feed.")
     };
 

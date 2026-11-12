@@ -16,21 +16,18 @@ while (!File.Exists(Path.Combine(project, "PresidioDemo.slnx")))
 // of four or more characters), and the frozen value-free parity baseline.
 var expectedCandidates = new Dictionary<string, int>
 {
-    ["ACI.txt"] = 17, ["ACI_02.txt"] = 17, ["ACI_03.txt"] = 15, ["ACI_04.txt"] = 16, ["ACI_05.txt"] = 14, ["ACI_06.txt"] = 17,
-    ["ETKT.txt"] = 7, ["ETKT_02.txt"] = 7, ["ETKT_03.txt"] = 17, ["ETKT_04.txt"] = 7, ["ETKT_05.txt"] = 9, ["ETKT_06.txt"] = 7,
     ["PNR.txt"] = 89, ["PNR_02.txt"] = 32
 };
 using var baseline = JsonDocument.Parse(File.ReadAllText(Path.Combine(project, "tests", "fixtures", "parity-baseline.json")));
 var locations = baseline.RootElement.GetProperty("protected").EnumerateArray().Concat(baseline.RootElement.GetProperty("pnrs").EnumerateArray())
-    .Where(e => e.GetProperty("feed").GetString() is "ACI" or "ETKT" or "PNR")
+    .Where(e => e.GetProperty("feed").GetString() == "PNR")
     .Select(e => (Sample: e.GetProperty("sample").GetString()!, Offset: int.Parse(e.GetProperty("location").GetString()!), Length: e.GetProperty("length").GetInt32()))
     .ToArray();
 var samples = Directory.EnumerateFiles(Path.Combine(project, "docs", "sample-docs"), "*.txt", SearchOption.AllDirectories)
     .Order(StringComparer.Ordinal)
     .Select(path => (Path: path, Feed: FeedFileRouting.FromPath(path)))
-    .Where(sample => sample.Feed is FeedType.ACI or FeedType.ETKT or FeedType.PNR)
     .ToArray();
-Check(samples.Length == 14, "14 binary samples expected, found " + samples.Length);
+Check(samples.Length == 2, "2 PNR samples expected, found " + samples.Length);
 
 int compared = 0;
 foreach (var (path, feed) in samples)
@@ -77,14 +74,6 @@ foreach (var (path, feed) in samples)
     tamperedPayload[outside] ^= 0x01;
     Reject(() => codec.Validate(parsed, envelope.Serialize(tamperedPayload)), name + ": changed raw word");
 
-    if (name == "ETKT_05.txt")
-    {
-        // WR-015: the words 00000001 31000000 at offsets 132-139 read as a one-character string but are raw words.
-        Check(!candidates.Any(c => c.Offset < 140 && c.Offset + c.Length > 132), "ETKT_05: words 132-139 must stay raw words");
-        Check(protectedContent.Length == message.Content.Length &&
-              FeedPayloadReader.Read(new FeedMessage(message.Delivery, protectedContent)).Payload.AsSpan(132, 8).SequenceEqual(envelope.Payload.AsSpan(132, 8)),
-              "ETKT_05: words 132-139 changed");
-    }
     Console.WriteLine($"PASS {name,-14} {candidates.Count,3} candidates | baseline locations inside candidates or short raw words");
 }
 

@@ -9,7 +9,6 @@
     <Project Path="tests/PresidioDemo.Messaging.Testing/PresidioDemo.Messaging.Testing.csproj" />
     <Project Path="tests/DetectionParityChecks/DetectionParityChecks.csproj" />
     <Project Path="tests/GenericCodecChecks/GenericCodecChecks.csproj" />
-    <Project Path="tests/JsonFeedChecks/JsonFeedChecks.csproj" />
     <Project Path="tests/FeedRoundTripChecks/FeedRoundTripChecks.csproj" />
     <Project Path="tests/FeedPipelineChecks/FeedPipelineChecks.csproj" />
     <Project Path="tests/FeedPipelineHarness/FeedPipelineHarness.csproj" />

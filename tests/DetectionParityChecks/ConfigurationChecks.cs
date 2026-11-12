@@ -22,7 +22,7 @@ public static class ConfigurationChecks
         string directory = Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers");
         var sets = RecognizerConfiguration.Load(directory);
         int passed = 0;
-        Check(sets.Count == FeedCatalog.All.Count, "all five recognizer files load", ref passed);
+        Check(sets.Count == FeedCatalog.All.Count && sets.ContainsKey(FeedType.PNR), "the PNR recognizer file loads", ref passed);
         foreach (var (feed, set) in sets)
         {
             Check(set.Anchors.Count > 0, FeedCatalog.Get(feed).FolderName + " declares a PNR anchor", ref passed);
@@ -47,7 +47,7 @@ public static class ConfigurationChecks
             string valid = File.ReadAllText(Path.Combine(directory, "pnr.xml"));
             Reject(scratch, "<recognizers feed=\"PNR\"", "not well-formed XML", ref passed);
             Reject(scratch, "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"y\">]><recognizers feed=\"PNR\"><pnrAnchor after=\"a\" /></recognizers>", "a DTD", ref passed);
-            Reject(scratch, valid.Replace("feed=\"PNR\"", "feed=\"ETKT\""), "the wrong feed attribute", ref passed);
+            Reject(scratch, valid.Replace("feed=\"PNR\"", "feed=\"OTHER\""), "the wrong feed attribute", ref passed);
             Reject(scratch, valid.Replace("<pattern>^\\d{9}$</pattern>", "<pattern>(unclosed</pattern>"), "a pattern that does not compile", ref passed);
             Reject(scratch, valid.Replace("name=\"memberName\"", "name=\"passengerName\""), "a duplicate name", ref passed);
             Reject(scratch, valid.Replace("<pnrAnchor after=\"creationTime\" offset=\"1\" />", ""), "a missing PNR anchor", ref passed);

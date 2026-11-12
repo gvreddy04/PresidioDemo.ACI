@@ -48,11 +48,7 @@ public sealed class FeedWorkflowRouter
     /// <param name="codecFactory">The factory that selects the codec for each feed route.</param>
     /// <returns>A router with one registered workflow for every supported feed route.</returns>
     public static FeedWorkflowRouter Create(IFeedProtector protector, Func<FeedType, IFeedCodec> codecFactory) => new([
-        new EtktWorkflow(protector, codecFactory(FeedType.ETKT)),
-        new PnrWorkflow(protector, codecFactory(FeedType.PNR)),
-        new PnrLinkingWorkflow(protector, codecFactory(FeedType.PnrLinking)),
-        new SeatsWorkflow(protector, codecFactory(FeedType.Seats)),
-        new AciWorkflow(protector, codecFactory(FeedType.ACI))
+        new PnrWorkflow(protector, codecFactory(FeedType.PNR))
     ]);
 
     /// <summary>

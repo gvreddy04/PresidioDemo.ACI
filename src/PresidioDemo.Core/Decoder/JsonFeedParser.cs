@@ -40,7 +40,7 @@ public abstract class JsonFeedParser(FeedType feed, JsonTokenType rootKind) : IF
     /// <exception cref="InvalidDataException">The supplied message, field set or configuration violates the reviewed processing contract.</exception>
     public ParsedFeed Parse(FeedMessage message)
     {
-        if (feed is not (FeedType.PnrLinking or FeedType.Seats) || message.Delivery.Feed != feed)
+        if (message.Delivery.Feed != feed)
         {
             throw new InvalidDataException("JSON codec route does not match delivery.");
         }

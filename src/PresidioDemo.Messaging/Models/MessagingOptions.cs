@@ -148,7 +148,7 @@ public sealed class MessageRoute
     public string DeadLetter { get; set; } = "";
 
     /// <summary>
-    /// Gets or sets the feed name, such as PNR or PNR-Linking.
+    /// Gets or sets the feed name, such as PNR.
     /// </summary>
     /// <value>The feed name.</value>
     public string Feed { get; set; } = "";
