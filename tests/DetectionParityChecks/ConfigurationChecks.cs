@@ -4,7 +4,7 @@ using PresidioDemo.Core.Protection;
 namespace PresidioDemo.DetectionParity;
 
 /// <summary>
-/// Checks that the five recognizer files load and that invalid files stop startup (V-04, WR-014).
+/// Checks that the PNR recognizer file loads and that invalid files stop startup (V-04, WR-014).
 /// </summary>
 public static class ConfigurationChecks
 {

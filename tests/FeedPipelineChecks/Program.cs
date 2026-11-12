@@ -62,7 +62,8 @@ static async Task CheckScheduling(IFeedProtector protector, byte[] input)
     {
         using (var release = new ManualResetEventSlim())
         {
-            var router = FeedWorkflowRouter.Create(protector, _ => new BlockingTestCodec(started, release));
+            var blocking = new BlockingTestCodec(started, release);
+            var router = FeedWorkflowRouter.Create(protector, _ => blocking);
             var broker = new InMemoryMessageBroker();
             var options = TestMessaging();
             using (var cancellation = new CancellationTokenSource())
@@ -83,6 +84,8 @@ static async Task CheckScheduling(IFeedProtector protector, byte[] input)
                     release.Set();
                     await pnr;
                     Check(broker.Pending("in.PNR") == 2 && broker.PublishedTo("out/PNR").Count == 0, "Interrupted message was acknowledged or published.");
+                    // Counted over the whole run: the second message never entered processing while the first was active.
+                    Check(blocking.Entries == 1, "One worker started a second message while the first was still active.");
                     Console.WriteLine("PASS shutdown drains active work before Python disposal and leaves interrupted input unacknowledged for redelivery");
                 }
                 finally { cancellation.Cancel(); release.Set(); await pnr; }
@@ -324,6 +327,11 @@ sealed class BlockingTestCodec(ManualResetEventSlim started, ManualResetEventSli
     /// </summary>
     private readonly TestOnlyCodec _inner = new();
 
+    /// <summary>
+    /// The number of messages that entered parsing.
+    /// </summary>
+    private int _entries;
+
     #endregion
 
     #region Methods
@@ -333,7 +341,7 @@ sealed class BlockingTestCodec(ManualResetEventSlim started, ManualResetEventSli
     /// </summary>
     /// <param name="message">The complete input delivery and its retained message bytes.</param>
     /// <returns>The decoded document or parsed fields and retained reconstruction layout.</returns>
-    public ParsedFeed Parse(FeedMessage message) { started.Set(); release.Wait(); return _inner.Parse(message); }
+    public ParsedFeed Parse(FeedMessage message) { Interlocked.Increment(ref _entries); started.Set(); release.Wait(); return _inner.Parse(message); }
 
     /// <summary>
     /// Reconstructs the original message representation using the complete protected field set.
@@ -349,6 +357,16 @@ sealed class BlockingTestCodec(ManualResetEventSlim started, ManualResetEventSli
     /// <param name="original">The complete extracted field set and its retained codec-specific serialization layout.</param>
     /// <param name="rebuilt">The complete reconstructed message bytes to validate.</param>
     public void Validate(ParsedFeed original, ReadOnlyMemory<byte> rebuilt) => _inner.Validate(original, rebuilt);
+
+    #endregion
+
+    #region Properties, Indexers
+
+    /// <summary>
+    /// Gets the number of messages that entered parsing.
+    /// </summary>
+    /// <value>The count of <see cref="Parse"/> calls so far.</value>
+    public int Entries => Volatile.Read(ref _entries);
 
     #endregion
 }

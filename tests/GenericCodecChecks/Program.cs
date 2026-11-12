@@ -93,6 +93,8 @@ Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0xFF, 0xFF, 0xFF, 0x00 }).Cou
 Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0, 0, 0, 0 }).Count == 0, "NUL bytes stay raw words");
 // A count followed by integer bytes without NUL (R-013) is not text in another encoding.
 Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0x8A, 0x1B, 0x2C, 0x3D }).Count == 0, "a count followed by integer bytes stays raw words");
+// WR-015: the words 00000001 31000000 read as a one-character string "1" but are raw words, never a candidate.
+Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 1, 0x31, 0, 0, 0 }).Count == 0, "a one-character counted string stays raw words");
 // Lowercase and mixed-case EBCDIC (code page 500) must fail closed too, not pass as raw words (review R-001). Fictional values.
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var ebcdic = Encoding.GetEncoding(500);

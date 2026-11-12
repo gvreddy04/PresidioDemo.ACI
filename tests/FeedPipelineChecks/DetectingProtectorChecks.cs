@@ -168,6 +168,81 @@ internal static class DetectingProtectorChecks
             "PNR.txt masks declared formats and unmatched strings");
         Console.WriteLine("PASS PNR anchors fail closed and unmatched strings are masked by default");
 
+        // WR-017: the embedded and optional anchor kinds stay supported although pnr.xml uses neither, so they are checked
+        // with test-only copies of pnr.xml and a fictional reference string written over one long PNR.txt string (same
+        // width). Each copy reconfigures the PNR registry, so the reviewed configuration is restored afterwards.
+        string AnchorFile(string anchors)
+        {
+            string file = Path.Combine(Path.GetTempPath(), "anchors-pnr-" + Guid.NewGuid().ToString("N") + ".xml");
+            File.WriteAllText(file, File.ReadAllText(Path.Combine(recognizers, "pnr.xml"))
+                .Replace("<pnrAnchor after=\"creationTime\" offset=\"1\" />", "<pnrAnchor after=\"creationTime\" offset=\"1\" />\n  " + anchors, StringComparison.Ordinal)
+                .Replace("<keep name=\"docsRecord\"", "<keep name=\"testReference\" scan=\"true\"><pattern>TESTREF \\S{6} .*</pattern></keep>\n  <keep name=\"docsRecord\"", StringComparison.Ordinal));
+            return file;
+        }
+        DetectingFeedProtector Configured(string file)
+        {
+            var anchorSets = sets.ToDictionary(pair => pair.Key, pair => pair.Value);
+            anchorSets[FeedType.PNR] = RecognizerConfiguration.LoadFile(file, FeedType.PNR);
+            var configured = new DetectingFeedProtector(anchorSets);
+            configured.Configure();
+            return configured;
+        }
+        // Writes "TESTREF <pnr> MAIL <fictional e-mail>" (cut to the string's width) over the first long enough string after
+        // the PNR anchor, and optionally replaces the string that follows it; returns the parse and the reference's slot.
+        (ParsedFeed Parsed, int Slot) WithReference(string pnr, string? following = null)
+        {
+            int slot = -1;
+            var parsed = ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
+            {
+                slot = Enumerable.Range(6, fields.Count - 7).First(i => fields[i].Value.Length >= (following is null ? 40 : 15) && (following is null || fields[i + 1].Value.Length == following.Length));
+                Encoding.ASCII.GetBytes(("TESTREF " + pnr + " MAIL JORDAN.MILLER@EXAMPLE.COM").PadRight(fields[slot].Value.Length)[..fields[slot].Value.Length]).CopyTo(payload, Locate(payload, fields[slot].Value));
+                if (following is not null)
+                {
+                    Encoding.ASCII.GetBytes(following).CopyTo(payload, Locate(payload, fields[slot + 1].Value));
+                }
+            });
+            return (parsed, slot);
+        }
+
+        string embedded = AnchorFile("<pnrAnchor within=\"testReference\" optional=\"true\"><pattern>TESTREF (?&lt;pnr>\\S{6}) .*</pattern></pnrAnchor>");
+        try
+        {
+            var embeddedProtector = Configured(embedded);
+            var absent = await embeddedProtector.ProtectAsync(FeedType.PNR, Parse(pnrSample), CancellationToken.None);
+            Check(absent.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 1, "an absent optional embedded anchor is not required");
+            var (reference, slot) = WithReference("K7QX2M");
+            var outcome = await embeddedProtector.ProtectAsync(FeedType.PNR, reference, CancellationToken.None);
+            string protectedValue = outcome.Values[reference.Fields[slot].Id];
+            Check(protectedValue[8..14] == "K7QX2M", "the embedded PNR stays unchanged");
+            Check(!protectedValue.Contains("JORDAN.MILLER", StringComparison.Ordinal) && protectedValue.StartsWith("TESTREF ", StringComparison.Ordinal),
+                "the e-mail inside the kept reference is masked while the record syntax stays");
+            await RejectAsync(() => embeddedProtector.ProtectAsync(FeedType.PNR, WithReference("K7-X2M").Parsed, CancellationToken.None),
+                "embedded PNR", "a malformed embedded PNR dead-letters");
+            Console.WriteLine("PASS an embedded PNR is kept while the rest of its string is scanned; a malformed one dead-letters");
+        }
+        finally
+        {
+            File.Delete(embedded);
+        }
+
+        string optional = AnchorFile("<pnrAnchor after=\"testReference\" offset=\"1\" optional=\"true\" />");
+        try
+        {
+            var optionalProtector = Configured(optional);
+            var absent = await optionalProtector.ProtectAsync(FeedType.PNR, Parse(pnrSample), CancellationToken.None);
+            Check(absent.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 1, "an absent optional anchor is not required");
+            var present = await optionalProtector.ProtectAsync(FeedType.PNR, WithReference("A1B2C3", "K7QX2M").Parsed, CancellationToken.None);
+            Check(present.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 2, "a PNR-shaped value at an optional anchor position is kept as a PNR");
+            await RejectAsync(() => optionalProtector.ProtectAsync(FeedType.PNR, WithReference("A1B2C3", "K7-X2M").Parsed, CancellationToken.None),
+                "anchor position is not PNR-shaped", "a malformed value at an optional anchor position dead-letters");
+            Console.WriteLine("PASS an optional anchor may be absent, keeps a PNR-shaped value and dead-letters a malformed one");
+        }
+        finally
+        {
+            File.Delete(optional);
+            protector.Configure();
+        }
+
         // WR-020: a rejection after detection keeps its events and values, with the reason unchanged. A codec whose
         // rebuild check fails stands in for a rebuild that differs outside the protected strings (WR-016).
         var failingRebuild = FeedWorkflowRouter.Create(protector, _ => new RebuildRejectingCodec(new PnrDecoder()));
@@ -200,8 +275,9 @@ internal static class DetectingProtectorChecks
                 var target = fields.First(f => f.Value.Length >= 30 && f.Value.All(c => c is >= ' ' and <= '~'));
                 Encoding.ASCII.GetBytes(new string('A', target.Value.Length - 1) + "!").CopyTo(payload, Locate(payload, target.Value));
             });
-            await RejectAnyAsync(() => slowProtector.ProtectAsync(FeedType.PNR, slowInput, CancellationToken.None),
-                ["Local Presidio detection failed", "A recognizer pattern timed out"], "a pattern timeout dead-letters the message");
+            // A format is evaluated in .NET only as an anchor neighbour, so the timeout surfaces from Presidio.
+            await RejectAsync(() => slowProtector.ProtectAsync(FeedType.PNR, slowInput, CancellationToken.None),
+                "Local Presidio detection failed", "a pattern timeout dead-letters the message");
         }
         finally
         {
@@ -341,18 +417,13 @@ internal static class DetectingProtectorChecks
     /// <summary>
     /// Requires an InvalidDataException whose message contains the expected text.
     /// </summary>
-    private static Task RejectAsync(Func<ValueTask<DetectionOutcome>> action, string expected, string label) => RejectAnyAsync(action, [expected], label);
-
-    /// <summary>
-    /// Requires an InvalidDataException whose message contains one of the expected texts.
-    /// </summary>
-    private static async Task RejectAnyAsync(Func<ValueTask<DetectionOutcome>> action, string[] expected, string label)
+    private static async Task RejectAsync(Func<ValueTask<DetectionOutcome>> action, string expected, string label)
     {
         try
         {
             await action();
         }
-        catch (InvalidDataException ex) when (expected.Any(text => ex.Message.Contains(text, StringComparison.Ordinal)))
+        catch (InvalidDataException ex) when (ex.Message.Contains(expected, StringComparison.Ordinal))
         {
             Console.WriteLine("PASS " + label);
             return;
