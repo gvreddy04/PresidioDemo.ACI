@@ -176,7 +176,7 @@
       {
         "feed": "PNR",
         "messagesPerSecondPerTask": 10.6,
-        "tasksForEqualShareOfPeak": 38
+        "tasks": 38
       }
     ],
     "tasksForPeak": 38,

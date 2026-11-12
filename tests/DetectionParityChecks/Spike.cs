@@ -238,7 +238,7 @@ public static class Spike
         var rows = perFeed.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p =>
         {
             double rate = p.Value.Messages / p.Value.Seconds;
-            return new { Feed = p.Key, MessagesPerSecondPerTask = Math.Round(rate, 1), TasksForEqualShareOfPeak = (int)Math.Ceiling(peakPerFeed / rate) };
+            return new { Feed = p.Key, MessagesPerSecondPerTask = Math.Round(rate, 1), Tasks = (int)Math.Ceiling(peakPerFeed / rate) };
         }).ToArray();
         return new
         {
@@ -247,7 +247,7 @@ public static class Spike
             NlpNer = "on (spaCy en_core_web_lg)",
             MessagesPerSecondPerTask = Math.Round(messages / total.Elapsed.TotalSeconds, 1),
             Feeds = rows,
-            TasksForPeak = rows.Sum(r => r.TasksForEqualShareOfPeak),
+            TasksForPeak = rows.Sum(r => r.Tasks),
             Assumption = "400 msg/s peak for the PNR feed; one worker process per ECS task"
         };
     }

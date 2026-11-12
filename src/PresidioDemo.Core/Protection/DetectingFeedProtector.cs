@@ -8,34 +8,34 @@ namespace PresidioDemo.Core.Protection;
 #region Enumerations
 
 /// <summary>
-/// What happened to one decoded string.
+/// What happened to one decoded string; the explicit values keep the existing numeric values (1 was a removed decision).
 /// </summary>
 public enum DetectionDecision
 {
     /// <summary>
     /// A format matched the whole string and masked it.
     /// </summary>
-    Masked,
+    Masked = 0,
     /// <summary>
     /// A keep matched; the string is published unchanged.
     /// </summary>
-    Kept,
+    Kept = 2,
     /// <summary>
     /// A scanned keep matched; personal-data spans inside it were masked.
     /// </summary>
-    MaskedInside,
+    MaskedInside = 3,
     /// <summary>
     /// The string is a PNR anchor and is published unchanged (WR-017).
     /// </summary>
-    Anchor,
+    Anchor = 4,
     /// <summary>
     /// No format or keep matched; the string is masked across its full width (WR-014).
     /// </summary>
-    MaskedByDefault,
+    MaskedByDefault = 5,
     /// <summary>
     /// A keep matched but a detection below the threshold sits inside it: published, and worth reviewing.
     /// </summary>
-    MissedBelowThreshold
+    MissedBelowThreshold = 6
 }
 
 #endregion
