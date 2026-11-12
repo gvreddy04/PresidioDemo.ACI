@@ -96,7 +96,7 @@ Check(XdrTextScanner.Scan(new byte[] { 0, 0, 0, 4, 0x8A, 0x1B, 0x2C, 0x3D }).Cou
 // Lowercase and mixed-case EBCDIC (code page 500) must fail closed too, not pass as raw words (review R-001). Fictional values.
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var ebcdic = Encoding.GetEncoding(500);
-foreach (string text in new[] { "miller/jordan", "Jordan Miller", "jordan.miller@example.com", "seat 23c window" })
+foreach (string text in new[] { "miller/jordan", "Jordan Miller", "jordan.miller@example.com", "row 23c window" })
 {
     Reject(() => XdrTextScanner.Scan(Counted(ebcdic.GetBytes(text))), "EBCDIC text: " + text.Length + " characters");
 }

@@ -71,7 +71,7 @@ class HarnessResult:
 
 
 def run(inputs, extra_args=(), expect=None, prefix="harness-"):
-    """Write inputs ({"Seats/a.txt": bytes}) into a fresh folder, run the harness once and return its result."""
+    """Write inputs ({"PNR/a.txt": bytes}) into a fresh folder, run the harness once and return its result."""
     if not HARNESS.is_file():
         raise AssertionError("Build tests/FeedPipelineHarness first; missing " + str(HARNESS))
     RUNS.mkdir(exist_ok=True)
