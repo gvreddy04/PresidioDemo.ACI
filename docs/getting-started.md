@@ -29,8 +29,9 @@ Everything runs on your own PC against a **local** broker. No shared environment
  └───────────────────────────────────────────────┘
 ```
 
-- Feeds: **ACI**, **ETKT**, **PNR**, **PNR-Linking**, **Seats**. Each has its own input queue, output topic and
-  dead-letter queue (DLQ), set in `src/PresidioDemo.Worker/appsettings.json` under `Environments:Local`.
+- Feed: **PNR** (this branch, `PNR-Worker`, runs the PNR feed only). It has its own input queue, output topic and
+  dead-letter queue (DLQ), set in `src/PresidioDemo.Worker/appsettings.json` under `Environments:Local`. In the
+  picture above, `<feed>` is `pnr`.
 - Presidio runs **inside** the worker process. The worker makes no HTTP calls; it opens only the native broker
   connection.
 - A valid message is published to `airline/<feed>/protected`. A message that cannot be protected safely goes,
@@ -192,7 +193,7 @@ These tests use an in-memory broker, so Docker is not needed yet. Run the three 
 
 ```powershell
 $failed = @()
-foreach ($p in 'WorkerChecks','Messaging.ContractTests','FeedPipelineChecks','FeedRoundTripChecks','JsonFeeds','ACI','ETKT','PNR') {
+foreach ($p in 'WorkerChecks','Messaging.ContractTests','FeedPipelineChecks','FeedRoundTripChecks','GenericCodecChecks') {
     Write-Host "== $p" -ForegroundColor Cyan
     dotnet run --project "tests/$p" --no-build
     if ($LASTEXITCODE -ne 0) { $failed += $p }
@@ -203,23 +204,23 @@ if ($failed.Count -eq 0) { Write-Host "All .NET checks passed." -ForegroundColor
 **You should see:** `All .NET checks passed.` `Messaging.ContractTests` prints `SKIP Solace contract ...` here; it
 runs against the broker in step 20.
 
-**Python unit tests** (54 tests, about 1–2 minutes; they load Presidio):
+**Python unit tests** (38 tests, about 1–2 minutes; they load Presidio):
 
 ```powershell
 src\.venv\Scripts\python -m unittest discover -s tests/unit-tests
 ```
 
-**You should see:** `Ran 54 tests` and `OK`.
+**You should see:** `Ran 38 tests` and `OK`.
 
-**End-to-end sample check.** This sends all 20 files in `docs/sample-docs` through the real feed workers and
+**End-to-end sample check.** This sends both files in `docs/sample-docs/PNR` through the real feed worker and
 embedded Presidio, over the in-memory broker:
 
 ```powershell
 src\.venv\Scripts\python tests/run_sample_verification.py
 ```
 
-**You should see:** `"Published": 17`, `"Rejected": 3` and `"all_checks_passed": true`. The 3 rejected files are
-the deliberate negative samples (see step 17).
+**You should see:** `"Published": 2` and `"all_checks_passed": true`. No PNR negative sample is supplied, so
+nothing is rejected.
 
 Test output goes to `.test-runs\` (git-ignored). Some files there contain the original, unprotected sample data;
 never copy them elsewhere.
@@ -316,30 +317,30 @@ dotnet run --project src/PresidioDemo.Worker
 ```
 
 - `DOTNET_ENVIRONMENT` is not set, so the worker uses `"CurrentEnvironment": "Local"` from `appsettings.json`.
-- With `"ProvisionQueues": true` (Local only), the worker creates its 10 queues (5 input, 5 DLQ) on first connect.
+- With `"ProvisionQueues": true` (Local only), the worker creates its 2 queues (`q.pnr.raw` and `q.pnr.dlq`) on
+  first connect.
 
 **You should see**, within about 10 seconds:
 
 ```
 PRESIDIO FEED WORKER | environment Local | Ctrl+C or SIGTERM stops after the current messages.
-info: ...SolaceConnection[0] Provisioned 10 Solace queues on the local broker.
+info: ...SolaceConnection[0] Provisioned 2 Solace queues on the local broker.
 info: ...SolaceConnection[0] Connected to Solace tcp://localhost:55555 (VPN default) as presidio-worker-local.
 info: ...FeedWorkerService[0] Initializing embedded local Presidio and the bundled NLP model...
-info: ...Worker.ACI[0] ACI worker reading q.aci.raw; output airline/aci/protected; dead letter q.aci.dlq.
-  (one line each for ETKT, PNR, PNR-Linking and Seats)
-info: ...FeedWorkerService[0] READY: 5 feed workers on Solace.
+info: ...Worker.PNR[0] PNR worker reading q.pnr.raw; output airline/pnr/protected; dead letter q.pnr.dlq.
+info: ...FeedWorkerService[0] READY: 1 feed workers on Solace.
 ```
 
 Leave this window open. **Ctrl+C** stops the worker after the current messages.
 
 The worker can also run as a container instead:
 `docker compose -f deploy/docker-compose.yml --profile worker up -d --build`. Run only one worker at a time: the
-input queues are exclusive, so a second worker just waits as a standby.
+input queue is exclusive, so a second worker just waits as a standby.
 
 ### Step 14. Create the watch queue for protected output (window 2)
 
 The worker publishes protected messages to **topics**. The broker delivers a topic message only to subscribers that
-exist at that moment, and drops it otherwise. So create a queue that subscribes to all output topics **before**
+exist at that moment, and drops it otherwise. So create a queue that subscribes to the output topic **before**
 sending anything. This script calls the local broker's admin API (SEMP) on port 8080:
 
 ```powershell
@@ -371,7 +372,7 @@ the broker on port 8008. It shows message payloads, which the queue list doesn't
 
 **You should see:** `airline/>` under **Subscribed Topics**. After step 16, messages appear under
 **Messages (Most Recent 20)**. Each shows the topic, delivery mode, **Correlation Id** (the sample file name, such as
-`SEATS_03.txt`) and the payload.
+`PNR_02.txt`) and the payload.
 
 Try-Me keeps only the last 20 messages and loses them when you reload the page. The watch queue (step 14) keeps
 everything.
@@ -386,31 +387,29 @@ dotnet run --project tools/FeedSampleSender
 
 The sender reads the same `appsettings.json` and environment as the worker. It connects with its own client name
 (`presidio-worker-local-sender`) and publishes every `.txt` and `.bin` file under `docs/sample-docs` to its feed's
-input queue. The feed comes from the folder name (`ACI`, `ETKT`, `PNR`, `PNR-Linking`, `Seats`) or else from the
-file name (`PNR_02.txt` → PNR). `.txt` files are sent as IBM MQ exports and `.bin` files as raw payloads.
+input queue. The feed comes from the folder name (`PNR`) or else from the file name (`PNR_02.txt` → PNR). `.txt`
+files are sent as IBM MQ exports and `.bin` files as raw payloads.
 
-**You should see:** `Sending 20 files to Solace (Local).` and then 20 lines like:
+**You should see:** `Sending 2 files to Solace (Local).` and then 2 lines like:
 
 ```
-SENT ACI          ACI.txt -> queue:q.aci.raw
-SENT Seats        SEATS_03.txt -> queue:q.seats.raw
+SENT PNR          PNR.txt -> queue:q.pnr.raw
+SENT PNR          PNR_02.txt -> queue:q.pnr.raw
 ```
 
-To send only some files:
+To send only one file:
 
 ```powershell
-dotnet run --project tools/FeedSampleSender -- --input docs/sample-docs/PNR
-dotnet run --project tools/FeedSampleSender -- --input docs/sample-docs/Seats/SEATS_03.txt
+dotnet run --project tools/FeedSampleSender -- --input docs/sample-docs/PNR/PNR_02.txt
 ```
 
 ### Step 17. Check the results
 
-**Worker window (1).** About one message per second, each with one summary line, plus value-free stage lines
-(`PARSED`, `POLICY`, `FIELDS`, `SERIALIZED`) with counts and timings:
+**Worker window (1).** Each message has one summary line, plus value-free stage lines (`DECODED`, `DETECTED`,
+`SERIALIZED`) with counts and timings:
 
 ```
-info: ...Worker.ACI[0] ACI 6cf9...9106 PUBLISHED to topic:airline/aci/protected | 2604 bytes | ... fields protected | delivery 1 | ... ms
-warn: ...Worker.Seats[0] Seats c9a4...b851 DEAD-LETTERED to queue:q.seats.dlq | JSON MQ exports require UTF-8 CCSID 1208; ...
+info: ...Worker.PNR[0] PNR 6cf9...9106 PUBLISHED to topic:airline/pnr/protected | ... bytes | ... fields protected | delivery 1 | ... ms
 ```
 
 **Queue status script (window 2).** Wait about 30 seconds after sending, then run:
@@ -427,40 +426,24 @@ $rows = for ($i = 0; $i -lt $list.data.Count; $i++) {
 $rows | Format-Table -AutoSize
 ```
 
-**You should see**, after sending all 20 samples once:
+**You should see**, after sending both samples once:
 
 ```
 Queue             Messages Consumers
 -----             -------- ---------
-q.aci.dlq                0         0
-q.aci.raw                0         1
-q.etkt.dlq               0         0
-q.etkt.raw               0         1
-q.pnr-linking.dlq        2         0
-q.pnr-linking.raw        0         1
 q.pnr.dlq                0         0
 q.pnr.raw                0         1
-q.protected.watch       17         0
-q.seats.dlq              1         0
-q.seats.raw              0         1
+q.protected.watch        2         0
 ```
 
 | What | Meaning |
 |---|---|
-| `.raw` queues: 0 messages, 1 consumer | The worker consumed everything and is still connected |
-| `q.protected.watch`: 17 | 17 samples were protected and published |
-| `q.pnr-linking.dlq`: 2, `q.seats.dlq`: 1 | The 3 negative samples were rejected, as intended |
+| `q.pnr.raw`: 0 messages, 1 consumer | The worker consumed everything and is still connected |
+| `q.protected.watch`: 2 | Both samples were protected and published |
+| `q.pnr.dlq`: 0 | Nothing was rejected; no PNR negative sample is supplied (step 19 shows the rejection path) |
 
-The same numbers are in PubSub+ Manager → **Queues** (click **Refresh Data**). Running the sender again adds 17
-and 3 more.
-
-The three dead-lettered samples test the rejection path:
-
-| Sample | DLQ | Reason in the worker log |
-|---|---|---|
-| `PNR_LINKING_02_Negative_Testing.txt` | `q.pnr-linking.dlq` | The feed codec returned a field without a configured protection policy. |
-| `PNR_LINKING_03_Negative_Testing.txt` | `q.pnr-linking.dlq` | Non-string JSON fields must remain unchanged. |
-| `SEATS_02_Negative_Testing.txt` | `q.seats.dlq` | JSON MQ exports require UTF-8 CCSID 1208; no implicit code-page conversion is performed. |
+The same numbers are in PubSub+ Manager → **Queues** (click **Refresh Data**). Running the sender again adds 2 more.
+This broker run has not been repeated on this branch; the end-to-end sample check in step 8 gives the same result.
 
 A DLQ holds the **original, unprotected** message, with the reason in the `presidio-reject-reason` header. Treat
 DLQ contents as personal data.
@@ -472,8 +455,8 @@ payload. To read payloads, use Try-Me's queue consumer:
 
 1. **Try Me!** → **Subscriber** → **Connect** (if not already connected).
 2. Expand **Bind to an endpoint to receive guaranteed messages**.
-3. Select **Queue**, replace `try-me-queue` with the queue name (`q.protected.watch`, or a DLQ such as
-   `q.seats.dlq`), and click **Start Consume**.
+3. Select **Queue**, replace `try-me-queue` with the queue name (`q.protected.watch`, or the DLQ `q.pnr.dlq`),
+   and click **Start Consume**.
 4. The messages appear under **Messages**, each with its Correlation Id (the sample file name) and payload. Click
    **Stop Consume** when done.
 
@@ -486,23 +469,23 @@ read reject reasons from the worker log.
 Use the Try-Me **Publisher** to put a hand-typed message on an input queue, for example to see the dead-letter path:
 
 1. **Try Me!** → **Publisher** → **Connect** (same defaults as the subscriber).
-2. Select **Queue**, enter `q.seats.raw`, and select **Persistent**.
+2. Select **Queue**, enter `q.pnr.raw`, and select **Persistent**.
 3. In **Message Content** enter `{"hello":"world"}` and click **Publish**.
 
 **You should see**, in the worker window:
 
 ```
-warn: ...Worker.Seats[0] Seats 19de...bb49 DEAD-LETTERED to queue:q.seats.dlq | The feed codec returned a field without a configured protection policy. | delivery 1 | ... ms
+warn: ...Worker.PNR[0] PNR 19de...bb49 DEAD-LETTERED to queue:q.pnr.dlq | XDR payload has 17 bytes, not a multiple of four; no output was published. | delivery 1 | ... ms
 ```
 
 The worker treats a Try-Me message as a **raw** payload, because Try-Me sends no `presidio-payload-format` header.
-`{"hello":"world"}` is not a valid Seats message, so it is rejected. If Try-Me is consuming `q.seats.dlq`
+`{"hello":"world"}` is not a valid binary PNR message, so it is rejected. If Try-Me is consuming `q.pnr.dlq`
 (step 18), the rejected message appears there straight away.
 
 Limits:
 
-- Try-Me message content is capped at **1024 characters**. The real samples are larger, and ACI, ETKT and PNR are
-  binary, so send real feed messages with `FeedSampleSender` (step 16).
+- Try-Me message content is capped at **1024 characters**. The real samples are larger, and PNR is binary, so send
+  real feed messages with `FeedSampleSender` (step 16).
 - Don't publish to the `airline/...` topics yourself; only the worker publishes protected output there.
 
 ### Step 20. Optional: run the Solace contract tests against the broker (window 2)
@@ -533,7 +516,7 @@ docker compose -f deploy/docker-compose.yml start
 docker compose -f deploy/docker-compose.yml down
 ```
 
-After a `down`, the next `up` (step 10) starts an empty broker. The worker recreates its 10 queues, but you must run
+After a `down`, the next `up` (step 10) starts an empty broker. The worker recreates its 2 queues, but you must run
 step 14 again for the watch queue.
 
 ---

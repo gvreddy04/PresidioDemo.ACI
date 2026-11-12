@@ -82,9 +82,8 @@ Expected output:
 ```text
 Connected to Solace tcp://solace:55555 (VPN default) as presidio-worker-container.
 Initializing embedded local Presidio and the bundled NLP model...
-ACI worker reading q.aci.raw; output airline/aci/protected; dead letter q.aci.dlq.
-...
-READY: 5 feed workers on Solace.
+PNR worker reading q.pnr.raw; output airline/pnr/protected; dead letter q.pnr.dlq.
+READY: 1 feed workers on Solace.
 ```
 
 Press Ctrl+C to stop following the log; the worker keeps running.
@@ -109,7 +108,7 @@ The sender connects as `presidio-worker-local-sender`, so it does not disconnect
 docker logs presidio-worker-local
 ```
 
-Expect 18 `PUBLISHED` and 2 `DEAD-LETTERED` lines. The dead-lettered files are `PNR_LINKING_03_Negative_Testing` (a date of birth sent as a JSON number) and `SEATS_02_Negative_Testing` (an MQ export without CCSID 1208); `PNR_LINKING_02_Negative_Testing` is published with its unlisted field masked. To inspect protected messages, open PubSub+ Manager at http://localhost:8080 (user `admin`) and create a queue subscribed to `airline/>` before sending the samples; a topic keeps nothing without a subscriber.
+Expect 2 `PUBLISHED` lines, one for each PNR sample, and no `DEAD-LETTERED` line; no PNR negative sample is supplied. (This container run has not been repeated on this branch; the test harness gives the same result.) To inspect protected messages, open PubSub+ Manager at http://localhost:8080 (user `admin`) and create a queue subscribed to `airline/>` before sending the samples; a topic keeps nothing without a subscriber.
 
 ### Step 7: Stop when you are done
 
@@ -141,11 +140,11 @@ In `deploy\.env.dev`, replace the DemoAir stand-ins with the real Dev values:
 
 - `SOLACE_PASSWORD`, `Solace__Host`, `Solace__Vpn` and `Solace__Username`.
 - `Solace__ClientName`: a name of your own. The broker disconnects an existing connection that uses the same client name.
-- The input queue, output topic and dead-letter queue for each route: 0 is ACI, 1 is ETKT (the TKT queue) and 2 is PNR.
+- The input queue, output topic and dead-letter queue of the PNR route, which is route 0 (`Messaging__Routes__0__…`). Settings that still name another feed stop startup with a message naming the route index and the feed.
 
 `deploy\.env.dev` is git-ignored. Never commit it, and never copy real values into a committed file.
 
-The Dev queues must already exist, because the worker does not create queues outside the Local environment. The Dev user must be allowed to consume the input queues and publish to the output topics.
+The Dev queues must already exist, because the worker does not create queues outside the Local environment. The Dev user must be allowed to consume the PNR input queue and publish to the PNR output topic.
 
 ### Step 9: Add the broker's CA certificate
 
@@ -169,11 +168,11 @@ docker compose -f deploy/docker-compose.dev.yml up -d
 docker compose -f deploy/docker-compose.dev.yml logs -f worker
 ```
 
-Wait for `READY: 3 feed workers on Solace.`. The log also reports that PNR-Linking and Seats have no route and are not consumed; this is expected for Dev.
+Wait for `READY: 1 feed workers on Solace.`.
 
 ### Step 11: Send samples (only with the broker owner's approval)
 
-**Run in:** project root, in a **new** PowerShell window, so the Dev values do not stay in a window you use for other work. These commands load `deploy\.env.dev` into this window only, then run the sender, which skips feeds that Dev does not route.
+**Run in:** project root, in a **new** PowerShell window, so the Dev values do not stay in a window you use for other work. These commands load `deploy\.env.dev` into this window only, then run the sender.
 
 ```powershell
 Set-Location <project root>
@@ -248,7 +247,7 @@ The script prints the pushed digest. Reference the digest or the commit tag in t
 | Certificates | None | `deploy\certs` |
 | Container | `presidio-worker-local` | `presidio-worker-dev` |
 | Settings | `Environments:Local` in `src/PresidioDemo.Worker/appsettings.json`, plus compose variables | `Environments:Dev`, overridden by `deploy\.env.dev` |
-| Feeds | ACI, ETKT, PNR, PNR-Linking, Seats | ACI, ETKT, PNR |
+| Feeds | PNR | PNR |
 | Queues | Created by the worker on startup | Must already exist |
 | Broker connection | `tcp://solace:55555`, no TLS | `tcps://`, CA from `deploy\certs` |
 | Memory limit | 3 GB | 3 GB |
