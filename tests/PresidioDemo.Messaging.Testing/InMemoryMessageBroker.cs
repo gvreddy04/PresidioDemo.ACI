@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
 
 namespace PresidioDemo.Messaging.Testing;
 

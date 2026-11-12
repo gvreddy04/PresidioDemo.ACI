@@ -2,11 +2,13 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Messaging;
-using PresidioDemo.Pipeline;
+using PresidioDemo.Core.Logging;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
 
-namespace PresidioDemo.Worker;
+namespace PresidioDemo.Worker.Pipeline;
 
 #region Models
 
@@ -33,8 +35,12 @@ public sealed record FeedWorkerOutcome(InboundMessage Input, FeedProcessingResul
 /// <param name="processor">Runs the feed workflow.</param>
 /// <param name="logger">Writes summaries without personal data.</param>
 /// <param name="onOutcome">Optional observer, used by tests.</param>
+/// <param name="detectionLog">Whether to write the value-free detection log (<c>Presidio:DetectionLog</c>, WR-018).</param>
+/// <param name="detectionLogValues">Whether detection lines also carry the decoded values; true only when both
+/// <c>Presidio:DetectionLog</c> and <c>Presidio:DetectionLogValues</c> are on in a non-production environment (WR-020).</param>
 public sealed class FeedWorker(FeedType feed, MessageRoute route, MessagingOptions options, IMessageConsumer consumer,
-    IMessagePublisher publisher, FeedMessageProcessor processor, ILogger logger, Func<FeedWorkerOutcome, ValueTask>? onOutcome = null)
+    IMessagePublisher publisher, FeedMessageProcessor processor, ILogger logger, Func<FeedWorkerOutcome, ValueTask>? onOutcome = null,
+    bool detectionLog = false, bool detectionLogValues = false)
 {
 
     #region Fields and Constants
@@ -143,6 +149,14 @@ public sealed class FeedWorker(FeedType feed, MessageRoute route, MessagingOptio
             logger.LogWarning("{Feed} {Transaction} acknowledgment failed and will be redelivered: {Reason}", FeedCatalog.Get(feed).FolderName, id.ToString("N"), ex.Message);
         }
         LogSummary(id, input, result, outbound, timer.ElapsedMilliseconds);
+        // Published messages and messages dead-lettered after detection ran have events (WR-018, WR-020). The single-line
+        // console logger would flatten the block, so it goes to standard output in one synchronized write, which also
+        // keeps another consumer's output from landing inside it.
+        if (detectionLog && result.DetectionEvents is { } events)
+        {
+            Console.Out.Write(DetectionLog.FormatBlock(feed, id, events, result.Published ? null : result.Reason,
+                detectionLogValues ? result.DetectionValues : null, detectionLogValues ? result.DetectionProtectedValues : null));
+        }
         if (onOutcome is not null)
         {
             await onOutcome(new(input, result, outbound));

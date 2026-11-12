@@ -1,6 +1,6 @@
 using System.Text;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Transport;
+using PresidioDemo.Core.Logging;
+using PresidioDemo.Core.Models;
 
 /// <summary>
 /// Verifies the complete before-and-after diagnostic log format written by the test harness.
@@ -21,14 +21,19 @@ static class FeedTransactionLogChecks
             var input = new FeedMessage(delivery, Encoding.UTF8.GetBytes("{\"Name\":\"Emily Carter\"}"));
             var result = new FeedWorkflowResult(Encoding.UTF8.GetBytes("{\"Name\":\"[PERSON]\"}"),
                 [new("/Name", "/Name", "Emily Carter")], [new("/Name", "/Name", "[PERSON]")]);
-            string text = FeedLoggers.Format(input, result, null);
+            // The harness passes the values-mode detection block; a fictional one is enough to check its place.
+            string block = "Seats 0 DETECTION PUBLISHED strings=1 pii=1 non-pii=0 review=0" + Environment.NewLine + "  PII fields (changed)" + Environment.NewLine
+                + "    \"/Name\"  \"Emily Carter\" -> \"[PERSON]\"  format=name entity=PERSON score=0.90 decision=replaced" + Environment.NewLine;
+            string text = FeedLoggers.Format(input, result, null, block);
             string[] sections = text.Split("AFTER ANONYMIZATION");
             Require(sections.Length == 2 && sections[0].Contains("Emily Carter") && !sections[1].Contains("Emily Carter") && sections[1].Contains("[PERSON]"), "Comparison sections mix original and protected data.");
             Require(text.Contains("BEFORE ANONYMIZATION") && text.Contains(new string('=', 72)), "Missing headings or separators.");
             Require(sections[0].Contains(Encoding.UTF8.GetString(input.Content.Span)) && sections[1].Contains(Encoding.UTF8.GetString(result.Content.Span)), "Complete JSON data is missing.");
             RequireOrder(text, "BEFORE ANONYMIZATION", "Complete feed data", Encoding.UTF8.GetString(input.Content.Span),
-                "Plain text:", Encoding.UTF8.GetString(input.Content.Span), "Parsed fields", "AFTER ANONYMIZATION", "Complete feed data", Encoding.UTF8.GetString(result.Content.Span));
-            Require(!sections[1].Contains("Parsed fields") && !sections[1].Contains("Plain text:"), "After section includes an unrequested view.");
+                "Plain text:", Encoding.UTF8.GetString(input.Content.Span), "Detection (binary offsets count from the start of the payload shown above):", block, "AFTER ANONYMIZATION", "Complete feed data", Encoding.UTF8.GetString(result.Content.Span));
+            Require(!sections[1].Contains("DETECTION") && !sections[1].Contains("Plain text:"), "After section includes an unrequested view.");
+            Require(!text.Contains("Parsed fields"), "The detection block replaces the parsed field list.");
+            Require(!FeedLoggers.Format(input, result, null).Contains("Detection ("), "Without a block there is no detection section.");
             byte[] binary = [0, 255, 65, 66, 127, 128];
             string rejected = FeedTransactionLog.Format(input with { Content = binary }, null, "Malformed fixture.");
             Require(rejected.Contains("00 FF 41 42 7F 80") && rejected.Contains("| ..AB..") && rejected.Contains("No validated anonymized output was produced.") && rejected.Contains("Malformed fixture."), "Rejected binary log lost bytes or failure reason.");
@@ -43,17 +48,17 @@ static class FeedTransactionLogChecks
             Require(malformedLog.Contains(malformed) && malformedLog.Contains("Complete feed data") && !malformedLog.Contains("Decoded MQ payload"), "Malformed MQ export lost its original bytes.");
             string protectedExport = "A VER 2\nA MSI DEMO\nA ENC 546\nA CCS 1208\nX " + Convert.ToHexString(result.Content.Span) + "\n";
             string mqLog = FeedTransactionLog.Format(input with { Delivery = delivery with { OriginalName = "sample.txt" }, Content = Encoding.UTF8.GetBytes(export) },
-                result with { Content = Encoding.UTF8.GetBytes(protectedExport) }, null);
+                result with { Content = Encoding.UTF8.GetBytes(protectedExport) }, null, block);
             RequireOrder(mqLog, "BEFORE ANONYMIZATION", $"Complete feed data ({Encoding.UTF8.GetByteCount(export)} bytes):", export,
                 $"Decoded MQ payload ({input.Content.Length} bytes):", Encoding.UTF8.GetString(input.Content.Span),
-                "Plain text:", Encoding.UTF8.GetString(input.Content.Span), "Parsed fields (location | policy field | value):", "AFTER ANONYMIZATION", $"Decoded MQ payload ({result.Content.Length} bytes):", Encoding.UTF8.GetString(result.Content.Span),
+                "Plain text:", Encoding.UTF8.GetString(input.Content.Span), "Detection (", block, "AFTER ANONYMIZATION", $"Decoded MQ payload ({result.Content.Length} bytes):", Encoding.UTF8.GetString(result.Content.Span),
                 $"Complete feed data ({Encoding.UTF8.GetByteCount(protectedExport)} bytes):", protectedExport);
             string[] mqSections = mqLog.Split("AFTER ANONYMIZATION");
-            string plainText = mqSections[0].Split("Plain text:")[1].Split("Parsed fields")[0];
+            string plainText = mqSections[0].Split("Plain text:")[1].Split("Detection (")[0];
             Require(plainText.Contains("Emily Carter") && !plainText.Contains("A VER") && !plainText.Contains("Hex dump"), "Plain text must show the decoded payload without envelope or hex-dump formatting.");
-            Require(mqSections[0].Split("Complete feed data").Length == 2 && mqSections[1].Split("Complete feed data").Length == 2 && !mqSections[1].Contains("Parsed fields") && !mqSections[1].Contains("Emily Carter"), "MQ sections duplicate complete data or mix original and protected values.");
-            string binaryLog = FeedTransactionLog.Format(input with { Content = binary }, result with { Content = new byte[] { 0, 255, 42 } }, null);
-            RequireOrder(binaryLog, "BEFORE ANONYMIZATION", "Complete feed data", "Hex dump", "Parsed fields",
+            Require(mqSections[0].Split("Complete feed data").Length == 2 && mqSections[1].Split("Complete feed data").Length == 2 && !mqSections[1].Contains("DETECTION") && !mqSections[1].Contains("Emily Carter"), "MQ sections duplicate complete data or mix original and protected values.");
+            string binaryLog = FeedTransactionLog.Format(input with { Content = binary }, result with { Content = new byte[] { 0, 255, 42 } }, null, block);
+            RequireOrder(binaryLog, "BEFORE ANONYMIZATION", "Complete feed data", "Hex dump", "Detection (",
                 "AFTER ANONYMIZATION", "Complete feed data", "Hex dump", "00 FF 2A");
             byte[] readableBinary = [0, 255, .. Encoding.UTF8.GetBytes("A long passenger name spanning hex rows | José\nNext\tfield"), 0];
             string readableExport = export[..export.IndexOf("X ", StringComparison.Ordinal)] + "X " + Convert.ToHexString(readableBinary) + "\n";

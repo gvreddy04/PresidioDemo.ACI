@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace PresidioDemo.Messaging.Solace;
+namespace PresidioDemo.Messaging.Solace.Connection;
 
 /// <summary>
 /// Solace connection settings, bound from the Solace section of the selected environment.

@@ -2,12 +2,13 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Messaging;
-using PresidioDemo.Messaging.Solace;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Messaging.Models;
+using PresidioDemo.Messaging.Solace.Connection;
 using PresidioDemo.Messaging.Testing;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Worker;
+using PresidioDemo.Worker.Hosting;
+using PresidioDemo.Worker.Pipeline;
 
 #region Execution
 
@@ -91,6 +92,44 @@ var withVenv = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCol
 Require(PresidioOptions.Load(withVenv, runRoot).PythonEnvironment == venv, "Presidio:PythonEnvironment resolves against the application folder");
 var noVenv = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:PythonEnvironment", "missing")]).Build();
 Reject(() => PresidioOptions.Load(noVenv, runRoot), "a Python environment without pyvenv.cfg stops startup");
+Require(!PresidioOptions.Load(local, runRoot).DetectionLog, "the detection log is off by default (WR-018)");
+var detectionLogOn = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DetectionLog", "true")]).Build();
+Require(PresidioOptions.Load(detectionLogOn, runRoot).DetectionLog, "Presidio:DetectionLog=true turns the detection log on");
+var detectionLogTypo = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DetectionLogs", "true")]).Build();
+Reject(() => PresidioOptions.Load(detectionLogTypo, runRoot), "a misspelled detection-log key stops startup");
+// WR-020: values in detection lines only with both flags on, and only in Local, Dev and QA.
+var defaults = PresidioOptions.Load(local, runRoot);
+Require(!defaults.DetectionLogValues && !defaults.WritesValues, "detection log values are off by default (WR-020)");
+defaults.RequireValuesEnvironment("Prod");
+Require(true, "with the values flag off, any environment starts");
+var valuesOn = new ConfigurationBuilder().AddConfiguration(local)
+    .AddInMemoryCollection([new("Presidio:DetectionLog", "true"), new("Presidio:DetectionLogValues", "true")]).Build();
+var withValues = PresidioOptions.Load(valuesOn, runRoot);
+Require(withValues.WritesValues, "Presidio:DetectionLogValues=true with the detection log on writes values");
+foreach (string allowed in new[] { "Local", "Dev", "QA", "dev", localName })
+{
+    withValues.RequireValuesEnvironment(allowed);
+}
+Require(true, "values are allowed in Local, Dev and QA (any case), and when an unset DOTNET_ENVIRONMENT falls back to Local");
+foreach (string refused in new[] { "Prod", "Production", "Stage" })
+{
+    Reject(() => withValues.RequireValuesEnvironment(refused), $"values in the {refused} environment stop startup");
+}
+var valuesOnly = PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(local)
+    .AddInMemoryCollection([new("Presidio:DetectionLogValues", "true")]).Build(), runRoot);
+Require(valuesOnly.DetectionLogValues && !valuesOnly.WritesValues, "values without the detection log write nothing (the worker warns at startup)");
+foreach (string removed in new[] { "PolicyFile", "XdrLayoutFile", "ReferenceLayoutFile" })
+{
+    var oldKey = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:" + removed, "Configuration/x.xml")]).Build();
+    Reject(() => PresidioOptions.Load(oldKey, runRoot), $"the removed Presidio:{removed} key stops startup");
+}
+foreach (string outside in new[] { Path.GetFullPath(Path.Combine(runRoot, "..", "mounted-recognizers")), "../recognizers", Path.GetPathRoot(runRoot)! })
+{
+    var mounted = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:RecognizerDirectory", outside)]).Build();
+    Reject(() => PresidioOptions.Load(mounted, runRoot), "a recognizer folder outside the application folder stops startup (PR-005)");
+}
+Require(PresidioOptions.Load(local, runRoot).RecognizerDirectory == Path.GetFullPath("Configuration/recognizers", runRoot),
+    "Presidio:RecognizerDirectory resolves against the application folder");
 
 // FeedWorker delivery rules
 var options = MessagingOptions.Load(local);
@@ -202,8 +241,10 @@ async Task RunUntil(InMemoryMessageBroker broker, FixtureWorkflows workflows, Fu
         }
         await Task.Delay(20);
     }
-    workflows.Release();
+    // Cancel before releasing a blocked workflow: released first, it could finish, publish and acknowledge before the
+    // stop, so a simulated crash would sometimes complete the message.
     stop.Cancel();
+    workflows.Release();
     await running;
 }
 

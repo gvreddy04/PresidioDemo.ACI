@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace PresidioDemo.Worker;
+namespace PresidioDemo.Worker.Hosting;
 
 /// <summary>
 /// The protection configuration files, bound from the Presidio section; relative paths resolve against the application folder.
@@ -8,13 +8,30 @@ namespace PresidioDemo.Worker;
 public sealed class PresidioOptions
 {
 
+    #region Fields and Constants
+
+    /// <summary>
+    /// The environments in which <see cref="DetectionLogValues"/> may take effect (WR-020): non-production only.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ValuesEnvironments = Array.AsReadOnly(new[] { "Local", "Dev", "QA" });
+
+    #endregion
+
     #region Properties, Indexers
 
     /// <summary>
-    /// Gets or sets the feed-policies XML file.
+    /// Gets or sets whether the value-free detection log is written (WR-018). Off by default; an environment settings file
+    /// or the <c>Presidio__DetectionLog</c> environment variable turns it on for one feed service. Read at startup.
     /// </summary>
-    /// <value>The file path.</value>
-    public string PolicyFile { get; set; } = "Configuration/feed-policies.xml";
+    /// <value>True to write one value-free line per decoded string.</value>
+    public bool DetectionLog { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether each detection log line also carries the actual decoded value (WR-020). Off by default; it
+    /// takes effect only with <see cref="DetectionLog"/> on, and only in <see cref="ValuesEnvironments"/>. Read at startup.
+    /// </summary>
+    /// <value>True to append the JSON-encoded decoded value to each detection log line.</value>
+    public bool DetectionLogValues { get; set; }
 
     /// <summary>
     /// Gets or sets the Python virtual environment folder, or null for the project's src/.venv.
@@ -23,16 +40,18 @@ public sealed class PresidioOptions
     public string? PythonEnvironment { get; set; }
 
     /// <summary>
-    /// Gets or sets the reference layouts XML file.
+    /// Gets or sets the folder that holds one recognizer XML file per feed (WR-014). The files ship inside the image
+    /// (PR-005); the folder is resolved against the application folder.
     /// </summary>
-    /// <value>The file path.</value>
-    public string ReferenceLayoutFile { get; set; } = "Configuration/reference-layouts.xml";
+    /// <value>The folder path, by default <c>Configuration/recognizers</c>.</value>
+    public string RecognizerDirectory { get; set; } = "Configuration/recognizers";
 
     /// <summary>
-    /// Gets or sets the XDR layouts XML file.
+    /// Gets whether detection log lines carry decoded values: both <see cref="DetectionLog"/> and
+    /// <see cref="DetectionLogValues"/> are on (WR-020).
     /// </summary>
-    /// <value>The file path.</value>
-    public string XdrLayoutFile { get; set; } = "Configuration/xdr-layouts.xml";
+    /// <value>True when values are appended to detection log lines.</value>
+    public bool WritesValues => DetectionLog && DetectionLogValues;
 
     #endregion
 
@@ -48,9 +67,13 @@ public sealed class PresidioOptions
     public static PresidioOptions Load(IConfiguration configuration, string baseDirectory)
     {
         var options = configuration.GetSection("Presidio").Get<PresidioOptions>(binder => binder.ErrorOnUnknownConfiguration = true) ?? new();
-        options.PolicyFile = Path.GetFullPath(options.PolicyFile, baseDirectory);
-        options.ReferenceLayoutFile = Path.GetFullPath(options.ReferenceLayoutFile, baseDirectory);
-        options.XdrLayoutFile = Path.GetFullPath(options.XdrLayoutFile, baseDirectory);
+        options.RecognizerDirectory = Path.GetFullPath(options.RecognizerDirectory, baseDirectory);
+        string application = Path.TrimEndingDirectorySeparator(Path.GetFullPath(baseDirectory)) + Path.DirectorySeparatorChar;
+        if (!options.RecognizerDirectory.StartsWith(application, StringComparison.OrdinalIgnoreCase))
+        {
+            // Recognizer files ship only inside the reviewed image (PR-005), never from a mounted or other folder.
+            throw new InvalidOperationException("Presidio:RecognizerDirectory must be a folder inside the application folder.");
+        }
         if (string.IsNullOrWhiteSpace(options.PythonEnvironment))
         {
             options.PythonEnvironment = null;
@@ -64,6 +87,20 @@ public sealed class PresidioOptions
             }
         }
         return options;
+    }
+
+    /// <summary>
+    /// Stops startup when <see cref="DetectionLogValues"/> is on in an environment outside <see cref="ValuesEnvironments"/>
+    /// (WR-020). The name is the selected environment, so an unset <c>DOTNET_ENVIRONMENT</c> that falls back to Local counts.
+    /// </summary>
+    /// <param name="environment">The selected environment name.</param>
+    /// <exception cref="InvalidOperationException">The values flag is on outside Local, Dev and QA.</exception>
+    public void RequireValuesEnvironment(string environment)
+    {
+        if (DetectionLogValues && !ValuesEnvironments.Contains(environment, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Presidio:DetectionLogValues is allowed only in the Local, Dev and QA environments.");
+        }
     }
 
     #endregion

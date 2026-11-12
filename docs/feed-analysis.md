@@ -1,18 +1,20 @@
 # Feed sample review and common structure
 
+> **Superseded design.** This review describes the per-feed parsers, field policies and the three XML files (`feed-policies.xml`, `xdr-layouts.xml`, `reference-layouts.xml`) that decoded-text detection replaced. Those files and parsers are removed. Protection now uses generic decoders and one recognizer file per feed; see [Decoded-text detection](../README.md#decoded-text-detection). The sample review, the structure findings (such as the Text0132 correction) and the field meanings below stay valid as analysis; the configuration examples and commands refer to the removed design. The protection results they produced are frozen, value-free, in [tests/fixtures/parity-baseline.json](../tests/fixtures/parity-baseline.json).
+
 All 20 files in `docs/sample-docs/<feed>/` were reviewed without changing source bytes. Each is an MQ text export: `A` rows carry metadata and `X` rows carry hexadecimal payload bytes. There are 14 binary payloads (six ACI, six ETKT, two PNR) and six JSON payloads (three PNR-Linking, three Seats). Three of the JSON files end in `_Negative_Testing`: they parse or route correctly but must be rejected at a later stage.
 
 The application retains the three original XML formats: reference mappings, feed policies and XDR structures. All six ACI examples parse with the same sequence, and all six ETKT examples parse with the same sequence. Reference offsets and lengths remain as reviewed baseline documentation; dynamic parsing follows ordered XDR definitions instead of selecting per-sample templates. String scanning was used during review only. The active configurations do not read source samples at runtime.
 
 ## PNR-Linking and Seats: shared System.Text.Json processing
 
-The standard routes select `PNRLinking/PnrLinkingFeedCodec` and `Seats/SeatsFeedCodec`, retaining one codec in each feed folder. These classes own the route and required JSON root and inherit `JsonFeedCodec`. The shared class uses `System.Text.Json.Utf8JsonReader` and `JsonSerializer` for both feeds. There are no separate JSON decoder, encoder, parser, serializer, model, structure-definition or report-formatter files. Four former shared helper files are also folded into the class, removing 18 redundant source files from the active project.
+The standard routes select `PnrLinkingParser` and `SeatsParser` in `src/PresidioDemo.Core/Decoder`. Each sets its route and required JSON root and inherits `JsonFeedParser`. The shared class uses `System.Text.Json.Utf8JsonReader` and `JsonSerializer` for both feeds. There are no separate JSON decoder, encoder, serializer, model, structure-definition or report-formatter files.
 
 The PNR-Linking sample has 76 scalar occurrences across 49 configured policy paths. SEATS.txt has 59 occurrences across 39 paths and SEATS_03.txt has 51; the Seats policy has 68 paths, covering both samples and New-section mirrors of reviewed Old-section rules. The existing XML policies remain authoritative. JSON field names and nesting supply the structure, while instance paths locate values and wildcard paths select the rules. Every populated scalar still needs a configured rule. Array position never establishes passenger identity.
 
 Both routes retain original JSON bytes, scalar types and grouping, including empty arrays and objects. PNRs, passenger grouping, replacement settings, nulls and non-string values are unchanged. A protected output may differ only within changed string spans; MQ metadata and all other payload bytes are validated before publication. Comparing the byte gaps between scalars also detects changes to property names and empty containers. A parsed message from one feed cannot be serialized through the other feed's codec.
 
-`dotnet run --project tests/JsonFeeds` checks both routes against an independent `System.Text.Json.JsonDocument` reader, supplied messages, two-passenger fixtures, malformed JSON, route mismatches, missing fields, unsupported encodings, type changes, PNR changes and unreviewed paths. Reports are generated in the test project and include original payload values and field paths. Existing full-workflow round-trip checks also assert that both JSON feeds use the shared implementation. Earlier delivered source snapshots and samples are preserved.
+`dotnet run --project tests/JsonFeedChecks` checks both routes against an independent `System.Text.Json.JsonDocument` reader, supplied messages, two-passenger fixtures, malformed JSON, route mismatches, missing fields, unsupported encodings, type changes, PNR changes and unreviewed paths. Reports are generated in the test project and include original payload values and field paths. Existing full-workflow round-trip checks also assert that both JSON feeds use the shared implementation. Earlier delivered source snapshots and samples are preserved.
 
 ## Common binary representation
 
@@ -24,7 +26,7 @@ The initial ACI/PNR word is two; ETKT's is five. The schema checks these individ
 
 ## ACI: documented structures and a dedicated module
 
-The C-structure definitions were checked against all six supplied ACI payloads. The ACI module is split across the concern folders of `src/PresidioDemo.Core`: `Parser/ACI` (XDR reader, decoder, parser), `Serializer/ACI` (XDR writer, encoder, serializer), `Models/ACI` (models, source definitions, indicators), `Reporting/ACI` (readable reports) and `FeedCodecs/ACI` (route adapter). The standard application route selects `AciFeedCodec` when the reviewed schema-driven ACI configuration is loaded.
+The C-structure definitions were checked against all six supplied ACI payloads. The schema-driven ACI module these definitions describe was replaced by decoded-text detection (2026110501): ACI is now decoded by `src/PresidioDemo.Core/Decoder/AciDecoder.cs` over `XdrFeedDecoder`, with no per-feed schema. The analysis is kept for reference.
 
 The decoder follows `seats_assigned` (ERROR=1 / DATA=2), flight/leg/compartment lists, passenger lists, passenger-flight items and nested seat, bag, registration, loyalty, profile, sequence, security, ticket, through-check-in, miscellaneous, history, consolidated-flight, codeshare, tier and transaction-time lists. Four-byte XDR scalar slots must not be confused with C memory sizes. Strings have length words and zero padding; null linked pointers have a zero presence word.
 
@@ -38,11 +40,11 @@ Every supplied sample passes complete byte-exact decode/encode and original MQ-e
 
 The existing XML sequence is retained as a conservative policy projection for this sample family. Every nonempty decoded string must be completely covered by a reviewed field rule. Unreviewed shapes go to the dead-letter queue without publication. A synthetic two-passenger case verifies decoder identity links but is intentionally rejected by the current processing projection. No populated sample verifies some documented branches, including the unusual placement of `fcpr_list.next` before spare members. Updated producer XDR routines are still needed to establish wider production support.
 
-The immutable workspace review, decoded examples, searchable transcription, verification evidence are under `D:\Bala_Support\topics\aci\v2`.
+The immutable workspace review, decoded examples, searchable transcription, verification evidence are kept in the analyst's local workspace, outside this repository.
 
 ## ETKT: a dedicated module and one 136-slot sample profile
 
-The ETKT module uses the same layout: `Parser/ETKT`, `Serializer/ETKT`, `Models/ETKT`, `Reporting/ETKT` and `FeedCodecs/ETKT` under `src/PresidioDemo.Core`. The supplied configuration selects this module with `etktStructures="true"`; custom reference entries without that setting keep their previous codec. The existing XML remains a reviewed protection projection. Every nonempty decoded string needs complete policy coverage, and unsupported populated shapes go to the dead-letter queue without publication.
+ETKT is likewise decoded by `src/PresidioDemo.Core/Decoder/EtktDecoder.cs` over `XdrFeedDecoder`; the schema-driven module and its policy XML described here were removed with decoded-text detection (2026110501). The analysis is kept for reference.
 
 The six samples begin with `5, 1, 0`. The screenshot union defines error=1, issue=2 and update=3. The agreed implementation supports an explicitly observed type-5 profile while leaving its discriminator meaning unconfirmed. All 136 scalar slots align with the screenshot history order. The encoder rebuilds the entire payload, including empty string slots and four-byte character slots. A separate Python reader agrees on every value, type, offset and encoded width.
 
@@ -66,7 +68,7 @@ The other 43 documented strings (issue, exchange, refund, name adjustment, fligh
 
 The approved status report uses a provisional MSB-first convention, retains the original signed number and hex value, labels set documented flags, and exposes reserved set bits. `0x00002000` maps to Checked in, `0x00004000` to Divided ETKT, and `0x00010002` to Adjusted flight plus Re-accommodation. Exchange destination uses document bit 31 only when Exchanged is set. The `h_indicator` word follows the same convention from the source comments: bits 0–2 are the ID type (001 = ETKT), bit 3 is ETKT was in PNR in AAA, bit 7 is Actioned all subsequent coupons and bit 12 is Action for OA. The samples hold `0x20000000`, `0x34000000`, `0x34080000` and `0x31000000`; bit 5 is set in two of them and stays visible as unassigned. These are display interpretations, never serialization changes. ETKT_06's spare text says ADJUSTED while its status word maps to Checked in; the report retains both without assuming they describe the same event.
 
-The local review, searchable reference for all documented structures, history transcription and sample checks are retained under `D:\Bala_Support\topics\etkt\v4`; earlier versions remain immutable. The issue/reissue declarations remain documentary because there are no populated supplied examples and the source repeats `etkt_inds_2`. The active decoder supports the verified type-5 history sample family; it does not silently enable the other documented union arms.
+The local review, searchable reference for all documented structures, history transcription and sample checks are retained in the analyst's local workspace, outside this repository; earlier versions remain immutable. The issue/reissue declarations remain documentary because there are no populated supplied examples and the source repeats `etkt_inds_2`. The active decoder supports the verified type-5 history sample family; it does not silently enable the other documented union arms.
 
 Every ETKT example fits the same 67 raw words and 69 counted-string slots. Sixteen flight-information strings are empty in most examples and populated in ETKT_03. The two divide-event PNR strings are empty except in ETKT_05.
 

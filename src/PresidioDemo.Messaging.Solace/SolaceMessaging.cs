@@ -1,6 +1,11 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
+using PresidioDemo.Messaging.Solace.Connection;
+using PresidioDemo.Messaging.Solace.Listener;
+using PresidioDemo.Messaging.Solace.Publisher;
 
 namespace PresidioDemo.Messaging.Solace;
 

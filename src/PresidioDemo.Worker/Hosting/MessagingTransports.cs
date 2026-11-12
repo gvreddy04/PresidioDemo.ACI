@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using PresidioDemo.Messaging;
+using PresidioDemo.Messaging.Models;
 using PresidioDemo.Messaging.Solace;
 
-namespace PresidioDemo.Worker;
+namespace PresidioDemo.Worker.Hosting;
 
 /// <summary>
 /// The one place a broker adapter is chosen from Messaging:Transport.

@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace PresidioDemo.Messaging;
+namespace PresidioDemo.Messaging.Models;
 
 /// <summary>
 /// Broker-neutral routing and delivery settings, bound from the Messaging section of appsettings.json.

@@ -2,13 +2,13 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Messaging;
+using PresidioDemo.Core.Logging;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Core.Protection;
+using PresidioDemo.Messaging.Models;
 using PresidioDemo.Messaging.Testing;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Protection;
-using PresidioDemo.Transport;
-using PresidioDemo.Worker;
+using PresidioDemo.Worker.Pipeline;
 
 #region Execution
 
@@ -19,31 +19,30 @@ using PresidioDemo.Worker;
 //   <output>/logs/<feed>/<file>.log.txt       full before/after transaction log (contains original data; tests only)
 //   <output>/report.json                      one item per input file
 // Exit codes: 0 every file published, 2 at least one rejected, 1 configuration or usage error.
-const string usage = "Usage: FeedPipelineHarness --input <folder> --output <folder> [--policy-file <xml>] [--xdr-layout-file <xml>] [--reference-layout-file <xml>] [--fail-publishes <n>]";
+const string usage = "Usage: FeedPipelineHarness --input <folder> --output <folder> [--recognizer-directory <folder>] [--detection-log on|off|values] [--fail-publishes <n>]";
 string project = AppContext.BaseDirectory;
 while (!File.Exists(Path.Combine(project, "PresidioDemo.slnx")))
 {
     project = Directory.GetParent(project)?.FullName ?? throw new Exception("Project root not found.");
 }
-string configuration = Path.Combine(project, "src", "PresidioDemo.Core", "Configuration");
 var settings = new Dictionary<string, string>
 {
-    ["--policy-file"] = Path.Combine(configuration, "feed-policies.xml"),
-    ["--xdr-layout-file"] = Path.Combine(configuration, "xdr-layouts.xml"),
-    ["--reference-layout-file"] = Path.Combine(configuration, "reference-layouts.xml"),
+    ["--recognizer-directory"] = Path.Combine(project, "src", "PresidioDemo.Core", "Configuration", "recognizers"),
+    ["--detection-log"] = "off",
     ["--fail-publishes"] = "0"
 };
 var supplied = new HashSet<string>();
 for (int i = 0; i < args.Length; i += 2)
 {
-    if (i + 1 >= args.Length || args[i] is not ("--input" or "--output" or "--policy-file" or "--xdr-layout-file" or "--reference-layout-file" or "--fail-publishes") || !supplied.Add(args[i]))
+    if (i + 1 >= args.Length || args[i] is not ("--input" or "--output" or "--recognizer-directory" or "--detection-log" or "--fail-publishes") || !supplied.Add(args[i]))
     {
         Console.Error.WriteLine(usage);
         return 1;
     }
-    settings[args[i]] = args[i] == "--fail-publishes" ? args[i + 1] : Path.GetFullPath(args[i + 1]);
+    settings[args[i]] = args[i] is "--fail-publishes" or "--detection-log" ? args[i + 1] : Path.GetFullPath(args[i + 1]);
 }
-if (!settings.ContainsKey("--input") || !settings.ContainsKey("--output") || !int.TryParse(settings["--fail-publishes"], out int failPublishes))
+if (!settings.ContainsKey("--input") || !settings.ContainsKey("--output") || !int.TryParse(settings["--fail-publishes"], out int failPublishes) ||
+    settings["--detection-log"] is not ("on" or "off" or "values"))
 {
     Console.Error.WriteLine(usage);
     return 1;
@@ -53,7 +52,7 @@ FeedPipelineConfiguration pipeline;
 List<(string Path, FeedType Feed, byte[] Content)> inputs = [];
 try
 {
-    pipeline = FeedPipelineConfiguration.Load(settings["--policy-file"], settings["--xdr-layout-file"], settings["--reference-layout-file"]);
+    pipeline = FeedPipelineConfiguration.Load(settings["--recognizer-directory"]);
     foreach (string file in Directory.EnumerateFiles(settings["--input"], "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
     {
         if (FeedFileRouting.IsFeedFile(file))
@@ -84,13 +83,19 @@ Console.WriteLine("Initializing embedded local Presidio and the bundled NLP mode
 PythonHost.Start();
 try
 {
-    var processor = new FeedMessageProcessor(pipeline.CreateRouter(new PresidioFeedProtector()));
+    var protector = pipeline.CreateProtector();
+    protector.Configure();
+    var processor = new FeedMessageProcessor(pipeline.CreateRouter(protector));
     using var stop = new CancellationTokenSource();
+    bool detectionLog = settings["--detection-log"] is "on" or "values";
+    bool detectionLogValues = settings["--detection-log"] == "values";
+    // The workers write the detection blocks themselves, exactly as in a deployment: value-free with Presidio:DetectionLog
+    // on (WR-018), with values in "values" mode as with Presidio:DetectionLogValues on (WR-020).
     var workers = routes.Select(pair => new FeedWorker(pair.Key, pair.Value, messaging, broker, broker, processor, NullLogger.Instance, outcome =>
     {
         outcomes[outcome.Input.CorrelationId!] = outcome;
         return ValueTask.CompletedTask;
-    }).RunAsync(stop.Token)).ToArray();
+    }, detectionLog, detectionLogValues).RunAsync(stop.Token)).ToArray();
     for (int i = 0; i < inputs.Count; i++)
     {
         var (path, feed, content) = inputs[i];
@@ -112,6 +117,7 @@ finally
 
 string output = settings["--output"];
 var items = new List<object>();
+var summary = new List<(FeedType Feed, string File, IReadOnlyList<DetectionEvent> Events)>();
 for (int i = 0; i < inputs.Count; i++)
 {
     var (path, feed, content) = inputs[i];
@@ -124,8 +130,17 @@ for (int i = 0; i < inputs.Count; i++)
         Console.WriteLine($"HARNESS {folder,-12} Pending   {name}");
         continue;
     }
+    // The before/after file is local and git-ignored, so its block carries values (WR-009).
+    string? detection = outcome.Result.DetectionEvents is { } events
+        ? DetectionLog.FormatBlock(feed, outcome.Result.Message.Delivery.MessageId, events, outcome.Result.Published ? null : outcome.Result.Reason,
+            outcome.Result.DetectionValues, outcome.Result.DetectionProtectedValues)
+        : null;
+    if (outcome.Result.DetectionEvents is { } reviewed)
+    {
+        summary.Add((feed, name, reviewed));
+    }
     string log = Write(Path.Combine(output, "logs", folder, name + ".log.txt"), System.Text.Encoding.UTF8.GetBytes(FeedLoggers.Format(
-        outcome.Result.Message with { Delivery = outcome.Result.Message.Delivery with { OriginalName = name } }, outcome.Result.Workflow, outcome.Result.Reason)));
+        outcome.Result.Message with { Delivery = outcome.Result.Message.Delivery with { OriginalName = name } }, outcome.Result.Workflow, outcome.Result.Reason, detection)));
     if (outcome.Result.Published)
     {
         string published = Write(Path.Combine(output, "published", folder, name), outcome.Published.Payload.ToArray());
@@ -141,12 +156,51 @@ for (int i = 0; i < inputs.Count; i++)
     }
 }
 string report = Write(Path.Combine(output, "report.json"), JsonSerializer.SerializeToUtf8Bytes(new { PublishAttempts = broker.PublishAttempts, Items = items }, new JsonSerializerOptions { WriteIndented = true }));
+Write(Path.Combine(output, "detection-summary.txt"), System.Text.Encoding.UTF8.GetBytes(Summary(inputs.Select(input => input.Feed).ToArray(), summary)));
 Console.WriteLine("Harness report: " + report);
 return items.All(item => item.GetType().GetProperty("Status")!.GetValue(item) as string == "Published") ? 0 : 2;
 
 #endregion
 
 #region Methods
+
+// Lists, per feed, every review-group field across the run (WR-021): a JSON field by its path with array indexes as *,
+// which keeps real property names because this file stays local (in dynamic-key JSON a property name can itself be a
+// value); a binary field by slot and payload offset. A path holding anything outside printable ASCII is JSON-encoded, so
+// no name can break or forge a line. No string value is written: only the decision, character shapes, a count and the
+// file names.
+static string Summary(IReadOnlyList<FeedType> inputFeeds, IReadOnlyList<(FeedType Feed, string File, IReadOnlyList<DetectionEvent> Events)> detected)
+{
+    var text = new System.Text.StringBuilder();
+    text.AppendLine("Detection summary: review-group fields per feed (value-free; a format or keep may be needed)");
+    foreach (var feed in FeedCatalog.All.Select(f => f.Type).Where(inputFeeds.Contains))
+    {
+        text.AppendLine();
+        text.AppendLine($"{FeedCatalog.Get(feed).FolderName}  review fields ({inputFeeds.Count(f => f == feed)} files)");
+        var rows = detected.Where(d => d.Feed == feed)
+            .SelectMany(d => d.Events.Where(e => DetectionLog.Group(e.Decision) == DetectionGroup.Review).Select(e => (d.File, Event: e)))
+            .GroupBy(r => (Field: r.Event.Offset is int offset ? $"slot {r.Event.Slot} @0x{offset:X4}" : Printable(r.Event.Pattern), r.Event.Decision))
+            .OrderBy(g => g.Key.Field, StringComparer.Ordinal).ThenBy(g => g.Key.Decision)
+            .ToArray();
+        if (rows.Length == 0)
+        {
+            text.AppendLine("  (none)");
+            continue;
+        }
+        int width = Math.Min(rows.Max(g => g.Key.Field.Length), 48);
+        foreach (var row in rows)
+        {
+            string shapes = string.Join(", ", row.Select(r => r.Event.Shape).Distinct(StringComparer.Ordinal).Take(3));
+            string files = string.Join(", ", row.Select(r => r.File).Distinct(StringComparer.Ordinal));
+            text.AppendLine($"  {row.Key.Field.PadRight(width)}  {DetectionLog.Decision(row.Key.Decision),-22}  seen={row.Count()}  shapes={shapes}  files={files}");
+        }
+    }
+    return text.ToString();
+}
+
+// Returns a path as it is when it is printable ASCII and does not start with a quote; otherwise JSON-encoded (WR-021).
+static string Printable(string path) =>
+    path.Length > 0 && path[0] != '"' && path.All(c => c is >= ' ' and <= '~') ? path : DetectionLog.Encode(path);
 
 static string Write(string path, byte[] content)
 {

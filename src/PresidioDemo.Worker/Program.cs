@@ -2,9 +2,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using PresidioDemo.Messaging;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Worker;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Messaging.Models;
+using PresidioDemo.Worker.Hosting;
+using PresidioDemo.Worker.Pipeline;
 
 #region Execution
 
@@ -18,7 +19,8 @@ try
     var messaging = MessagingOptions.Load(configuration);
     FeedWorkerService.Routes(messaging);
     var presidio = PresidioOptions.Load(configuration, baseDirectory);
-    var pipeline = FeedPipelineConfiguration.Load(presidio.PolicyFile, presidio.XdrLayoutFile, presidio.ReferenceLayoutFile);
+    presidio.RequireValuesEnvironment(environment);
+    var pipeline = FeedPipelineConfiguration.Load(presidio.RecognizerDirectory);
 
     var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
     {

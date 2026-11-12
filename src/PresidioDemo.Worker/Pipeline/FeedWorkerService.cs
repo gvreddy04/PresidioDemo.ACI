@@ -1,11 +1,13 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using PresidioDemo.Feeds.Shared;
-using PresidioDemo.Messaging;
-using PresidioDemo.Pipeline;
-using PresidioDemo.Protection;
+using PresidioDemo.Core.Models;
+using PresidioDemo.Core.Pipeline;
+using PresidioDemo.Core.Protection;
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
+using PresidioDemo.Worker.Hosting;
 
-namespace PresidioDemo.Worker;
+namespace PresidioDemo.Worker.Pipeline;
 
 /// <summary>
 /// Connects the broker, starts embedded Presidio and runs one feed worker per route until the host stops.
@@ -72,7 +74,9 @@ public sealed class FeedWorkerService(IMessagingConnection connection, IMessageC
             log.LogInformation("Initializing embedded local Presidio and the bundled NLP model...");
             PythonHost.Start(presidio.PythonEnvironment);
             pythonStarted = true;
-            var processor = new FeedMessageProcessor(pipeline.CreateRouter(new PresidioFeedProtector()));
+            var protector = pipeline.CreateProtector();
+            protector.Configure();
+            var processor = new FeedMessageProcessor(pipeline.CreateRouter(protector));
             // ConsumersPerTask workers per feed, each on its own broker flow: .NET parsing and broker round trips overlap
             // across consumers and feeds; shared Python calls are serialized.
             var routes = Routes(messaging);
@@ -83,7 +87,20 @@ public sealed class FeedWorkerService(IMessagingConnection connection, IMessageC
             }
             var workers = routes.SelectMany(pair => Enumerable.Range(0, messaging.ConsumersPerTask).Select(_ =>
                 new FeedWorker(pair.Key, pair.Value, messaging, consumer, publisher, processor,
-                    loggers.CreateLogger("PresidioDemo.Worker." + FeedCatalog.Get(pair.Key).FolderName)).RunAsync(stoppingToken))).ToArray();
+                    loggers.CreateLogger("PresidioDemo.Worker." + FeedCatalog.Get(pair.Key).FolderName), detectionLog: presidio.DetectionLog,
+                    detectionLogValues: presidio.WritesValues).RunAsync(stoppingToken))).ToArray();
+            if (presidio.WritesValues)
+            {
+                log.LogWarning("Detection log on with values: each line also carries the actual decoded value (WR-020). Non-production only.");
+            }
+            else if (presidio.DetectionLog)
+            {
+                log.LogInformation("Detection log on: one value-free line per decoded string (WR-018).");
+            }
+            else if (presidio.DetectionLogValues)
+            {
+                log.LogWarning("Presidio:DetectionLogValues has no effect while Presidio:DetectionLog is off; no detection lines are written.");
+            }
             if (messaging.ConsumersPerTask > 1)
             {
                 log.LogInformation("{Consumers} consumers per feed.", messaging.ConsumersPerTask);

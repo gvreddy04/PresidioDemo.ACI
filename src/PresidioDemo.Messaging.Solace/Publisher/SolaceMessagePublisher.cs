@@ -1,6 +1,10 @@
+using PresidioDemo.Messaging.Abstractions;
+using PresidioDemo.Messaging.Models;
+using PresidioDemo.Messaging.Solace.Connection;
+using PresidioDemo.Messaging.Solace.Models;
 using SolaceSystems.Solclient.Messaging;
 
-namespace PresidioDemo.Messaging.Solace;
+namespace PresidioDemo.Messaging.Solace.Publisher;
 
 /// <summary>
 /// Publishes persistent messages to Solace topics or queues and waits for the broker's confirmation.
