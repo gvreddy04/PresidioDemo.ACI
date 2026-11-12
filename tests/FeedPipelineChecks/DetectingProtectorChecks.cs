@@ -50,7 +50,7 @@ internal static class DetectingProtectorChecks
             Check(anchors.Length > 0, Path.GetFileName(path) + ": a PNR anchor was found");
             var decoded = parsed.Fields
                 .Select(f => f.Value).Where(v => v.Any(char.IsAsciiLetterOrDigit) && DetectingFeedProtector.Shape(v) != v).ToHashSet(StringComparer.Ordinal);
-            Check(outcome.Events.All(e => !decoded.Contains(e.Shape) && !decoded.Contains(e.Key) && !decoded.Contains(e.Format) && !decoded.Contains(e.Entity)),
+            Check(outcome.Events.All(e => !decoded.Contains(e.Shape) && !decoded.Contains(e.Format) && !decoded.Contains(e.Entity)),
                 Path.GetFileName(path) + ": no detection event field carries a decoded value");
             // WR-020: the decoded values travel beside the events, one per slot, for the values flag only.
             var candidateValues = parsed.Fields.Select(f => f.Value);
@@ -58,7 +58,7 @@ internal static class DetectingProtectorChecks
                 Path.GetFileName(path) + ": the candidate values match the decoded strings by slot");
             // WR-018: a binary string is located by its payload offset only.
             var payload = FeedPayloadReader.Read(message).Payload;
-            Check(outcome.Events.Zip(parsed.Fields).All(pair => pair.First.Offset is int at && pair.First.Pointer.Length == 0 && pair.First.SafePointer.Length == 0 &&
+            Check(outcome.Events.Zip(parsed.Fields).All(pair => pair.First.Offset is int at &&
                 Encoding.ASCII.GetString(payload.AsSpan(at, pair.Second.Value.Length)) == pair.Second.Value), Path.GetFileName(path) + ": each binary event's offset leads to its value");
             published++;
         }
@@ -67,16 +67,16 @@ internal static class DetectingProtectorChecks
         // WR-018, WR-020: one block per message; every string in exactly one group; values only when passed, JSON-encoded.
         DetectionEvent[] events =
         [
-            new(0, "", 13, "AAAAAA/AAAAAA", "passengerName", "PERSON", 0.9, DetectionDecision.Masked, Offset: 0x01A4),
-            new(1, "", 6, "AAA999", "anchor", "PNR", 1, DetectionDecision.Anchor, Offset: 0x0018),
-            new(2, "", 22, "AAAA AAA", "none", "", 0, DetectionDecision.MaskedByDefault, Offset: 0x0200),
-            new(3, "", 6, "AA9999", "flightNumber", "", 0, DetectionDecision.Kept, Offset: 0x00E0),
-            new(4, "", 10, "AA99999999", "loyalty", "LOYALTY", 0.3, DetectionDecision.MissedBelowThreshold, Offset: 0x0288),
-            new(5, "", 7, "[AAAAA]", "dob", "DATE_OF_BIRTH", 1, DetectionDecision.Replaced, Offset: 0x02A0),
-            new(6, "", 12, "AAAA AAAAAAA", "remark", "PERSON", 0.85, DetectionDecision.MaskedInside, Offset: 0x02C0),
+            new(0, 13, "AAAAAA/AAAAAA", "passengerName", "PERSON", 0.9, DetectionDecision.Masked, 0x01A4),
+            new(1, 6, "AAA999", "anchor", "PNR", 1, DetectionDecision.Anchor, 0x0018),
+            new(2, 22, "AAAA AAA", "none", "", 0, DetectionDecision.MaskedByDefault, 0x0200),
+            new(3, 6, "AA9999", "flightNumber", "", 0, DetectionDecision.Kept, 0x00E0),
+            new(4, 10, "AA99999999", "loyalty", "LOYALTY", 0.3, DetectionDecision.MissedBelowThreshold, 0x0288),
+            new(5, 7, "99AAA99", "dob", "DATE_OF_BIRTH", 1, DetectionDecision.Masked, 0x02A0),
+            new(6, 12, "AAAA AAAAAAA", "remark", "PERSON", 0.85, DetectionDecision.MaskedInside, 0x02C0),
         ];
         string[] fictionalBefore = ["MILLER/JORDAN", "ABC123", "LINE ONE\nSAY \"HI\" \\ X", "XY1234", "XY99887766", "14MAR85", "CALL O'NEIL"];
-        string[] fictionalAfter = ["######/######", "ABC123", "######################", "XY1234", "XY99887766", "[DOB]", "CALL ######"];
+        string[] fictionalAfter = ["######/######", "ABC123", "######################", "XY1234", "XY99887766", "*******", "CALL ######"];
         string[] Lines(string block) => block.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         string Section(string block, string heading)
         {

@@ -12,7 +12,8 @@ namespace PresidioDemo.Core.Models;
 /// <param name="Id">The instance path locating this scalar within one message; it is not passenger identity.</param>
 /// <param name="Name">The declared field name or reviewed layout identifier.</param>
 /// <param name="Value">The original scalar value or decoded member associated with this declaration.</param>
-/// <param name="Offset">For a binary string, the payload byte offset of its first text byte; null for JSON fields.</param>
+/// <param name="Offset">The payload byte offset of the string's first text byte, or null for a field the codec does not
+/// locate in the payload.</param>
 public sealed record FeedField(string Id, string Name, string Value, int? Offset = null);
 
 /// <summary>

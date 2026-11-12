@@ -11,7 +11,7 @@ namespace PresidioDemo.DetectionParity;
 /// </summary>
 /// <param name="Sample">The sample file name.</param>
 /// <param name="Feed">The feed folder name.</param>
-/// <param name="Location">The payload byte offset for binary feeds, or the JSON instance path.</param>
+/// <param name="Location">The payload byte offset.</param>
 /// <param name="Length">The original value length in characters.</param>
 /// <param name="Entity">The entity type today's policy assigns.</param>
 public sealed record ParityEntry(string Sample, string Feed, string Location, int Length, string Entity);
@@ -21,7 +21,7 @@ public sealed record ParityEntry(string Sample, string Feed, string Location, in
 /// </summary>
 /// <param name="Sample">The sample file name.</param>
 /// <param name="Feed">The feed folder name.</param>
-/// <param name="Location">The payload byte offset for binary feeds, or the JSON instance path.</param>
+/// <param name="Location">The payload byte offset.</param>
 /// <param name="Length">The PNR length in characters.</param>
 public sealed record PnrEntry(string Sample, string Feed, string Location, int Length);
 
@@ -80,13 +80,6 @@ public static class SampleFiles
 {
 
     #region Methods
-
-    /// <summary>
-    /// Returns whether a feed uses the binary XDR transport.
-    /// </summary>
-    /// <param name="feed">The feed route.</param>
-    /// <returns>True for PNR.</returns>
-    public static bool IsBinary(FeedType feed) => feed is FeedType.PNR;
 
     /// <summary>
     /// Returns the production samples (all samples except the negative tests), in ordinal order.

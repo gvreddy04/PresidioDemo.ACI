@@ -1,7 +1,6 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using PresidioDemo.Core.Decoder;
 using PresidioDemo.Core.Models;
 
 namespace PresidioDemo.Core.Protection;
@@ -17,10 +16,6 @@ public enum DetectionDecision
     /// A format matched the whole string and masked it.
     /// </summary>
     Masked,
-    /// <summary>
-    /// A format matched the whole string and replaced it with a token (JSON).
-    /// </summary>
-    Replaced,
     /// <summary>
     /// A keep matched; the string is published unchanged.
     /// </summary>
@@ -51,22 +46,15 @@ public enum DetectionDecision
 /// One value-free detection log entry (WR-018): never the value, only its location, length, shape and decision.
 /// </summary>
 /// <param name="Slot">The candidate's order among the message's decoded strings.</param>
-/// <param name="Key">The JSON property name, or empty for binary feeds.</param>
 /// <param name="Length">The value length.</param>
 /// <param name="Shape">The character shape: A for a letter, 9 for a digit, other characters unchanged.</param>
 /// <param name="Format">The format or keep name, <c>anchor</c>, or <c>none</c>.</param>
 /// <param name="Entity">The detected entity types, joined with <c>+</c>, or empty.</param>
 /// <param name="Score">The highest detection score, or zero.</param>
 /// <param name="Decision">What happened to the string.</param>
-/// <param name="Pointer">For JSON, the field's JSON Pointer with every property name, which may itself be a value; written
-/// only with <c>Presidio:DetectionLogValues</c> on (WR-020). Empty for binary feeds.</param>
-/// <param name="SafePointer">For JSON, the JSON Pointer with every property name the feed's recognizer file does not declare
-/// replaced by <c>?</c>; array indexes stay (WR-018). Empty for binary feeds.</param>
-/// <param name="Pattern">For JSON, the field's path with array indexes as <c>*</c>, used to group fields across messages in
-/// the local harness summary (WR-021). Empty for binary feeds.</param>
-/// <param name="Offset">For binary feeds, the payload byte offset of the string; otherwise null.</param>
-public sealed record DetectionEvent(int Slot, string Key, int Length, string Shape, string Format, string Entity, double Score, DetectionDecision Decision,
-    string Pointer = "", string SafePointer = "", string Pattern = "", int? Offset = null);
+/// <param name="Offset">The payload byte offset of the string, or null when the codec reports none.</param>
+public sealed record DetectionEvent(int Slot, int Length, string Shape, string Format, string Entity, double Score, DetectionDecision Decision,
+    int? Offset = null);
 
 /// <summary>
 /// The protected values for every parsed field, and one detection event per decoded string.
@@ -84,9 +72,9 @@ public sealed record DetectionOutcome(IReadOnlyDictionary<string, string> Values
 
 /// <summary>
 /// Protects one parsed message with its feed's recognizer set. Every decision is made here; Presidio only returns spans.
-/// Order per string: PNR anchor, JSON key format, JSON key keep, a declared format matching the whole string, keep
-/// pattern (scanned keeps mask inner spans), a built-in matching the whole string, otherwise a full-width default mask
-/// (WR-014, WR-017, W-020).
+/// Order per string: PNR anchor, a declared format matching the whole string, keep pattern (scanned keeps mask inner
+/// spans), a built-in matching the whole string, otherwise a full-width default mask (WR-014, WR-017, W-020). Every
+/// protection keeps the string's width, so the binary framing stays valid (WR-015).
 /// </summary>
 /// <param name="sets">The validated recognizer sets by feed.</param>
 public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRecognizerSet> sets) : IFeedProtector
@@ -126,47 +114,31 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     /// Protects every decoded string of one parsed message.
     /// </summary>
     /// <param name="feed">The feed route.</param>
-    /// <param name="parsed">The parse from the generic XDR codec or a JSON codec.</param>
+    /// <param name="parsed">The parse from the generic XDR codec.</param>
     /// <param name="cancellationToken">The token that interrupts processing.</param>
     /// <returns>The protected value of every field and one event per decoded string.</returns>
     /// <exception cref="InvalidDataException">A structural failure: anchor missing or not PNR-shaped, or detection failed.</exception>
     public async ValueTask<DetectionOutcome> ProtectAsync(FeedType feed, ParsedFeed parsed, CancellationToken cancellationToken)
     {
         var set = sets[feed];
-        bool binary = feed is FeedType.PNR;
-        var candidates = binary ? parsed.Fields : JsonFeedParser.StringFields(parsed);
+        var candidates = parsed.Fields;
         var values = parsed.Fields.ToDictionary(field => field.Id, field => field.Value, StringComparer.Ordinal);
         var events = new DetectionEvent?[candidates.Count];
         Anchoring anchors;
         try
         {
-            if (!binary)
-            {
-                RejectProtectedNonStrings(set, parsed, candidates);
-            }
-            anchors = Anchors(set, candidates, binary);
+            anchors = Anchors(set, candidates);
             var pending = new List<int>();
             for (int slot = 0; slot < candidates.Count; slot++)
             {
                 var field = candidates[slot];
-                string key = binary ? "" : Key(field.Name);
-                var at = Locate(set, field, key, binary);
                 if (field.Value.Length == 0)
                 {
-                    events[slot] = Event(slot, at, field.Value, "none", "", 0, DetectionDecision.Kept);
+                    events[slot] = Event(slot, field, "none", "", 0, DetectionDecision.Kept);
                 }
                 else if (anchors.Whole.Contains(slot))
                 {
-                    events[slot] = Event(slot, at, field.Value, "anchor", "PNR", 1, DetectionDecision.Anchor);
-                }
-                else if (!binary && FormatByPath(set, field.Name) is { } byKey)
-                {
-                    values[field.Id] = Protect(field.Value, byKey.Action, byKey.MaskCharacter, byKey.Replacement);
-                    events[slot] = Event(slot, at, field.Value, byKey.Name, byKey.Entity, 1, Decision(byKey.Action));
-                }
-                else if (!binary && KeepByKey(set, key) is { Scan: false } keptByKey)
-                {
-                    events[slot] = Event(slot, at, field.Value, keptByKey.Name, "", 0, DetectionDecision.Kept);
+                    events[slot] = Event(slot, field, "anchor", "PNR", 1, DetectionDecision.Anchor);
                 }
                 else
                 {
@@ -179,21 +151,19 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
             {
                 int slot = pending[i];
                 var field = candidates[slot];
-                string key = binary ? "" : Key(field.Name);
-                var at = Locate(set, field, key, binary);
                 var found = spans[i];
                 var strong = found.Where(span => span.Score >= set.Threshold).ToArray();
                 var wholeSpans = strong.Where(span => span.Start == 0 && span.End == field.Value.Length).OrderByDescending(span => span.Score).ToArray();
                 // A declared format that matches the whole value wins over a keep, so a keep never publishes a value the
                 // feed's own formats identify (R-004); built-in and NER matches come after keeps, which are reviewed.
                 var formatWhole = wholeSpans.FirstOrDefault(span => set.Formats.Any(format => format.Name == span.Recognizer));
-                var keep = (binary ? null : KeepByKey(set, key)) ?? set.Keeps.FirstOrDefault(k => k.MatchesWhole(field.Value));
+                var keep = set.Keeps.FirstOrDefault(k => k.MatchesWhole(field.Value));
                 if (formatWhole is not null || (keep is null && wholeSpans.Length > 0))
                 {
                     var whole = formatWhole ?? wholeSpans[0];
-                    var (action, mask, replacement, name) = Protection(set, whole);
-                    values[field.Id] = Protect(field.Value, binary ? DetectionAction.Mask : action, mask, replacement);
-                    events[slot] = Event(slot, at, field.Value, name, whole.Entity, whole.Score, Decision(binary ? DetectionAction.Mask : action));
+                    var (mask, name) = Protection(set, whole);
+                    values[field.Id] = new string(mask, field.Value.Length);
+                    events[slot] = Event(slot, field, name, whole.Entity, whole.Score, DetectionDecision.Masked);
                 }
                 else if (keep is not null)
                 {
@@ -203,12 +173,12 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
                     var weak = keep.Scan ? found.Where(span => span.Score < set.Threshold && !inside.Any(s => s.Start <= span.Start && s.End >= span.End)).ToArray() : [];
                     var decision = inside.Length > 0 ? DetectionDecision.MaskedInside : weak.Length > 0 ? DetectionDecision.MissedBelowThreshold : DetectionDecision.Kept;
                     var reported = inside.Length > 0 ? inside : weak;
-                    events[slot] = Event(slot, at, field.Value, keep.Name, Entities(reported), reported.Select(s => s.Score).DefaultIfEmpty(0).Max(), decision);
+                    events[slot] = Event(slot, field, keep.Name, Entities(reported), reported.Select(s => s.Score).DefaultIfEmpty(0).Max(), decision);
                 }
                 else
                 {
                     values[field.Id] = DefaultMask(field.Value, set.DefaultMaskCharacter);
-                    events[slot] = Event(slot, at, field.Value, "none", Entities(found), found.Select(s => s.Score).DefaultIfEmpty(0).Max(), DetectionDecision.MaskedByDefault);
+                    events[slot] = Event(slot, field, "none", Entities(found), found.Select(s => s.Score).DefaultIfEmpty(0).Max(), DetectionDecision.MaskedByDefault);
                 }
             }
         }
@@ -266,31 +236,16 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     /// </summary>
     /// <param name="set">The recognizer set.</param>
     /// <param name="candidates">The decoded strings.</param>
-    /// <param name="binary">Whether the feed is binary.</param>
     /// <returns>The whole-string anchored slots and the embedded PNR ranges.</returns>
     /// <exception cref="InvalidDataException">An anchor is missing or malformed.</exception>
-    private static Anchoring Anchors(FeedRecognizerSet set, IReadOnlyList<FeedField> candidates, bool binary)
+    private static Anchoring Anchors(FeedRecognizerSet set, IReadOnlyList<FeedField> candidates)
     {
         var whole = new HashSet<int>();
         var embedded = new Dictionary<int, (int Start, int Length)>();
         foreach (var anchor in set.Anchors)
         {
             int before = whole.Count + embedded.Count;
-            if (!binary)
-            {
-                for (int slot = 0; slot < candidates.Count; slot++)
-                {
-                    if (candidates[slot].Value.Length > 0 && anchor.Keys.Contains(Key(candidates[slot].Name), StringComparer.OrdinalIgnoreCase))
-                    {
-                        if (!FeedRecognizerSet.PnrShape.IsMatch(candidates[slot].Value))
-                        {
-                            throw new InvalidDataException("A JSON PNR anchor holds a value that is not PNR-shaped; input retained and no output was published.");
-                        }
-                        whole.Add(slot);
-                    }
-                }
-            }
-            else if (anchor.Within is not null)
+            if (anchor.Within is not null)
             {
                 var keep = set.Keeps.Single(k => k.Name == anchor.Within);
                 for (int slot = 0; slot < candidates.Count; slot++)
@@ -336,87 +291,6 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     }
 
     /// <summary>
-    /// Rejects a number or boolean anywhere under a personal-data key: it cannot be protected without changing its JSON
-    /// type, so the message fails closed instead of publishing it (WR-016). Nulls carry no value.
-    /// </summary>
-    /// <param name="set">The recognizer set.</param>
-    /// <param name="parsed">The JSON parse.</param>
-    /// <param name="strings">The string fields.</param>
-    /// <exception cref="InvalidDataException">A protected key holds a number or boolean.</exception>
-    private static void RejectProtectedNonStrings(FeedRecognizerSet set, ParsedFeed parsed, IReadOnlyList<FeedField> strings)
-    {
-        var ids = strings.Select(field => field.Id).ToHashSet(StringComparer.Ordinal);
-        if (parsed.Fields.Any(field => !ids.Contains(field.Id) && field.Value.Length > 0 && Segments(field.Name).Any(segment => FormatByKey(set, segment) is not null)))
-        {
-            throw new InvalidDataException("A personal-data property holds a number or boolean that cannot be protected in its JSON type; input retained and no output was published.");
-        }
-    }
-
-    /// <summary>
-    /// Returns the key format of a JSON value from its deepest path segment that has one, so a value nested under a
-    /// personal-data key (such as <c>DOB.Date</c>) is protected by that key.
-    /// </summary>
-    private static DetectionFormat? FormatByPath(FeedRecognizerSet set, string name) =>
-        Segments(name).Reverse().Select(segment => FormatByKey(set, segment)).FirstOrDefault(format => format is not null);
-
-    /// <summary>
-    /// Returns the format whose key list holds this JSON property name, ignoring case.
-    /// </summary>
-    private static DetectionFormat? FormatByKey(FeedRecognizerSet set, string key) =>
-        key.Length == 0 ? null : set.Formats.FirstOrDefault(f => f.Keys.Contains(key, StringComparer.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// Returns the keep whose key list holds this JSON property name, ignoring case.
-    /// </summary>
-    private static KeepFormat? KeepByKey(FeedRecognizerSet set, string key) =>
-        key.Length == 0 ? null : set.Keeps.FirstOrDefault(k => k.Keys.Contains(key, StringComparer.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// Returns whether the feed's recognizer file declares a JSON property name in a format, keep or anchor.
-    /// </summary>
-    private static bool IsDeclared(FeedRecognizerSet set, string key) =>
-        FormatByKey(set, key) is not null || KeepByKey(set, key) is not null ||
-            set.Anchors.Any(a => a.Keys.Contains(key, StringComparer.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// Returns where a decoded string sits, for the detection log. A property name the recognizer file does not declare
-    /// could itself be a value in dynamic-key JSON, so the value-free forms show it as <c>?</c> (WR-018); the full pointer
-    /// is written only under WR-020.
-    /// </summary>
-    /// <param name="set">The recognizer set.</param>
-    /// <param name="field">The decoded string.</param>
-    /// <param name="key">The field's JSON property name, or empty for binary feeds.</param>
-    /// <param name="binary">Whether the feed is binary.</param>
-    /// <returns>The logged key and the pointer forms, or the payload offset for a binary string.</returns>
-    private static Location Locate(FeedRecognizerSet set, FeedField field, string key, bool binary)
-    {
-        if (binary)
-        {
-            return new Location("", "", "", "", field.Offset);
-        }
-        // The instance pointer and the wildcard path have the same segments; a "*" in the path marks an array index.
-        string[] instance = field.Id.Split('/');
-        string[] pattern = field.Name.Split('/');
-        var safe = instance.Select((segment, i) => segment.Length == 0 || (i < pattern.Length && pattern[i] == "*") ||
-            IsDeclared(set, segment.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal)) ? segment : "?");
-        return new Location(IsDeclared(set, key) ? key : "?", field.Id, string.Join('/', safe), field.Name, null);
-    }
-
-    /// <summary>
-    /// Returns the unescaped property names of a wildcard field path, without array wildcards.
-    /// </summary>
-    private static IEnumerable<string> Segments(string name) =>
-        name.Split('/').Where(segment => segment.Length > 0 && segment != "*")
-            .Select(segment => segment.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal));
-
-    /// <summary>
-    /// Returns the JSON property name of a field: the last path segment that is not an array index wildcard.
-    /// </summary>
-    /// <param name="name">The wildcard field path.</param>
-    /// <returns>The unescaped property name.</returns>
-    private static string Key(string name) => Segments(name).LastOrDefault() ?? "";
-
-    /// <summary>
     /// Calls the Python bridge once for every pending string of the message.
     /// </summary>
     /// <param name="feed">The feed route.</param>
@@ -456,8 +330,8 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     }
 
     /// <summary>
-    /// Masks the given spans in place with each span's own mask character (also in JSON, so a kept value keeps its
-    /// width), never touching an embedded PNR range.
+    /// Masks the given spans in place with each span's own mask character, so a kept value keeps its width, never
+    /// touching an embedded PNR range.
     /// </summary>
     /// <param name="value">The kept value.</param>
     /// <param name="spans">The spans to protect.</param>
@@ -486,34 +360,23 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     }
 
     /// <summary>
-    /// Returns the protection of the format or built-in that produced a span.
+    /// Returns the mask character of the format or built-in that produced a span, and the name to log.
     /// </summary>
     /// <param name="set">The recognizer set.</param>
     /// <param name="span">The span.</param>
-    /// <returns>Action, mask character, replacement and the name to log.</returns>
-    private static (DetectionAction Action, char Mask, string Replacement, string Name) Protection(FeedRecognizerSet set, Span span)
+    /// <returns>The mask character and the name to log.</returns>
+    private static (char Mask, string Name) Protection(FeedRecognizerSet set, Span span)
     {
         if (set.Formats.FirstOrDefault(f => f.Name == span.Recognizer) is { } format)
         {
-            return (format.Action, format.MaskCharacter, format.Replacement, format.Name);
+            return (format.MaskCharacter, format.Name);
         }
         if (set.BuiltIns.FirstOrDefault(b => b.Entity == span.Entity) is { } builtIn)
         {
-            return (builtIn.Action, builtIn.MaskCharacter, builtIn.Replacement, "builtIn:" + builtIn.Entity);
+            return (builtIn.MaskCharacter, "builtIn:" + builtIn.Entity);
         }
-        return (DetectionAction.Mask, set.DefaultMaskCharacter, "", "builtIn:" + span.Entity);
+        return (set.DefaultMaskCharacter, "builtIn:" + span.Entity);
     }
-
-    /// <summary>
-    /// Applies a whole-value protection.
-    /// </summary>
-    private static string Protect(string value, DetectionAction action, char mask, string replacement) =>
-        action == DetectionAction.Replace ? replacement : new string(mask, value.Length);
-
-    /// <summary>
-    /// Maps an action to its decision.
-    /// </summary>
-    private static DetectionDecision Decision(DetectionAction action) => action == DetectionAction.Replace ? DetectionDecision.Replaced : DetectionDecision.Masked;
 
     /// <summary>
     /// Joins the distinct entity types of spans.
@@ -521,11 +384,10 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     private static string Entities(IEnumerable<Span> spans) => string.Join('+', spans.Select(s => s.Entity).Distinct().Order(StringComparer.Ordinal));
 
     /// <summary>
-    /// Creates a value-free event.
+    /// Creates a value-free event, located by the string's payload offset (WR-018).
     /// </summary>
-    private static DetectionEvent Event(int slot, Location at, string value, string format, string entity, double score, DetectionDecision decision) =>
-        new(slot, at.Key, value.Length, Shape(value), format, entity, Math.Round(score, 2, MidpointRounding.AwayFromZero), decision,
-            at.Pointer, at.SafePointer, at.Pattern, at.Offset);
+    private static DetectionEvent Event(int slot, FeedField field, string format, string entity, double score, DetectionDecision decision) =>
+        new(slot, field.Value.Length, Shape(field.Value), format, entity, Math.Round(score, 2, MidpointRounding.AwayFromZero), decision, field.Offset);
 
     #endregion
 
@@ -537,16 +399,6 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     /// <param name="Whole">Slots whose whole value is a PNR.</param>
     /// <param name="Embedded">Slots holding an embedded PNR, with its character range.</param>
     private sealed record Anchoring(HashSet<int> Whole, Dictionary<int, (int Start, int Length)> Embedded);
-
-    /// <summary>
-    /// Where one decoded string sits, as the detection events record it.
-    /// </summary>
-    /// <param name="Key">The declared property name, <c>?</c>, or empty for binary feeds.</param>
-    /// <param name="Pointer">The full JSON Pointer, or empty for binary feeds.</param>
-    /// <param name="SafePointer">The JSON Pointer with undeclared property names as <c>?</c>, or empty.</param>
-    /// <param name="Pattern">The wildcard path, or empty.</param>
-    /// <param name="Offset">The payload byte offset of a binary string, or null.</param>
-    private sealed record Location(string Key, string Pointer, string SafePointer, string Pattern, int? Offset);
 
     /// <summary>
     /// One span returned by Presidio.

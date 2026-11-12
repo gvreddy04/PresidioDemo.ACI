@@ -7,43 +7,20 @@ using PresidioDemo.Core.Models;
 
 namespace PresidioDemo.Core.Protection;
 
-#region Enumerations
-
-/// <summary>
-/// How a detected value is protected.
-/// </summary>
-public enum DetectionAction
-{
-    /// <summary>
-    /// Replace every character with the mask character, keeping the width (required in binary feeds).
-    /// </summary>
-    Mask,
-    /// <summary>
-    /// Replace the whole value with a fixed token (JSON feeds only).
-    /// </summary>
-    Replace
-}
-
-#endregion
-
 #region Models
 
 /// <summary>
-/// A declared personal-data format: an entity found by patterns (through Presidio) or, in JSON feeds, by property key.
+/// A declared personal-data format: an entity found by patterns (through Presidio). A match is masked across its width.
 /// </summary>
 /// <param name="Name">The unique format name used in logs and anchors.</param>
 /// <param name="Entity">The entity type, such as <c>PERSON</c>.</param>
 /// <param name="Score">The score Presidio assigns to a pattern match.</param>
-/// <param name="Action">How a match is protected.</param>
-/// <param name="MaskCharacter">The mask character for <see cref="DetectionAction.Mask"/>.</param>
-/// <param name="Replacement">The token for <see cref="DetectionAction.Replace"/>.</param>
+/// <param name="MaskCharacter">The mask character.</param>
 /// <param name="Patterns">The regular expressions, in the syntax shared by .NET and the Python <c>regex</c> module.</param>
 /// <param name="Context">Context words that raise a pattern's score when they appear near the match.</param>
-/// <param name="Keys">JSON property names whose whole value is this entity.</param>
 /// <param name="Compiled">The patterns compiled for whole-value checks in .NET.</param>
-public sealed record DetectionFormat(string Name, string Entity, double Score, DetectionAction Action, char MaskCharacter,
-    string Replacement, IReadOnlyList<string> Patterns, IReadOnlyList<string> Context, IReadOnlyList<string> Keys,
-    IReadOnlyList<Regex> Compiled)
+public sealed record DetectionFormat(string Name, string Entity, double Score, char MaskCharacter,
+    IReadOnlyList<string> Patterns, IReadOnlyList<string> Context, IReadOnlyList<Regex> Compiled)
 {
 
     #region Methods
@@ -63,10 +40,9 @@ public sealed record DetectionFormat(string Name, string Entity, double Score, D
 /// </summary>
 /// <param name="Name">The unique keep name used in logs and anchors.</param>
 /// <param name="Patterns">Whole-value regular expressions.</param>
-/// <param name="Keys">JSON property names whose value is kept.</param>
 /// <param name="Scan">Whether personal-data spans inside a kept value are still masked (records such as DOCS).</param>
 /// <param name="Compiled">The compiled whole-value patterns.</param>
-public sealed record KeepFormat(string Name, IReadOnlyList<string> Patterns, IReadOnlyList<string> Keys, bool Scan, IReadOnlyList<Regex> Compiled)
+public sealed record KeepFormat(string Name, IReadOnlyList<string> Patterns, bool Scan, IReadOnlyList<Regex> Compiled)
 {
 
     #region Methods
@@ -82,29 +58,24 @@ public sealed record KeepFormat(string Name, IReadOnlyList<string> Patterns, IRe
 }
 
 /// <summary>
-/// A Presidio built-in recognizer enabled for a feed, with its protection.
+/// A Presidio built-in recognizer enabled for a feed; a match is masked across its width.
 /// </summary>
 /// <param name="Entity">The built-in entity type, such as <c>EMAIL_ADDRESS</c> or <c>PERSON</c> (spaCy NER).</param>
-/// <param name="Action">How a match is protected.</param>
 /// <param name="MaskCharacter">The mask character.</param>
-/// <param name="Replacement">The replacement token.</param>
-public sealed record BuiltInEntity(string Entity, DetectionAction Action, char MaskCharacter, string Replacement);
+public sealed record BuiltInEntity(string Entity, char MaskCharacter);
 
 /// <summary>
-/// Locates a PNR that must stay unchanged (WR-017): in JSON by property key; in binary feeds as the PNR-shaped candidate
-/// next to a named neighbouring format, or as the <c>pnr</c> group of a pattern inside a named keep (a PNR embedded in a
-/// longer string). Never a fixed slot.
+/// Locates a PNR that must stay unchanged (WR-017): the PNR-shaped candidate next to a named neighbouring format, or the
+/// <c>pnr</c> group of a pattern inside a named keep (a PNR embedded in a longer string). Never a fixed slot.
 /// </summary>
 /// <param name="After">The format or keep name the PNR follows, or null.</param>
 /// <param name="Before">The format or keep name the PNR precedes, or null.</param>
 /// <param name="Offset">How many candidates away from the first neighbour match the PNR sits.</param>
 /// <param name="Optional">Whether the anchor may be absent, as with a PNR that only some messages carry. An optional position that
 /// holds a value matching no keep or format is a malformed PNR and dead-letters the message.</param>
-/// <param name="Keys">JSON property names that hold a PNR.</param>
 /// <param name="Within">The keep whose strings embed a PNR, or null.</param>
 /// <param name="Capture">For <paramref name="Within"/>: the whole-value pattern whose <c>pnr</c> group is the PNR.</param>
-public sealed record PnrAnchor(string? After, string? Before, int Offset, bool Optional, IReadOnlyList<string> Keys,
-    string? Within = null, Regex? Capture = null);
+public sealed record PnrAnchor(string? After, string? Before, int Offset, bool Optional, string? Within = null, Regex? Capture = null);
 
 /// <summary>
 /// The validated recognizer configuration of one feed.
@@ -154,11 +125,11 @@ public sealed record FeedRecognizerSet(FeedType Feed, double Threshold, char Def
     /// <summary>
     /// Returns the JSON document the Python bridge uses to build this feed's Presidio registry.
     /// </summary>
-    /// <returns>Pattern formats and built-in entities, without key-only formats; .NET applies the threshold.</returns>
+    /// <returns>Pattern formats and built-in entities; .NET applies the threshold.</returns>
     public string ToBridgeJson() => JsonSerializer.Serialize(new
     {
         feed = FeedCatalog.Get(Feed).FolderName,
-        formats = Formats.Where(f => f.Patterns.Count > 0).Select(f => new { name = f.Name, entity = f.Entity, score = f.Score, patterns = f.Patterns, context = f.Context }),
+        formats = Formats.Select(f => new { name = f.Name, entity = f.Entity, score = f.Score, patterns = f.Patterns, context = f.Context }),
         builtIns = BuiltIns.Select(b => b.Entity)
     });
 
@@ -254,7 +225,6 @@ public static class RecognizerConfiguration
     /// <returns>The validated set.</returns>
     private static FeedRecognizerSet Parse(XElement root, FeedType feed, string file)
     {
-        bool binary = feed is FeedType.PNR;
         Require(root.Name.LocalName == "recognizers", file, "root must be <recognizers>");
         Attributes(root, file, "feed", "threshold", "defaultMaskCharacter");
         Require(root.Attribute("feed")?.Value == FeedCatalog.Get(feed).FolderName, file, "feed attribute must be " + FeedCatalog.Get(feed).FolderName);
@@ -271,16 +241,16 @@ public static class RecognizerConfiguration
             switch (element.Name.LocalName)
             {
                 case "format":
-                    formats.Add(Format(element, binary, names, file));
+                    formats.Add(Format(element, names, file));
                     break;
                 case "keep":
-                    keeps.Add(Keep(element, binary, names, file));
+                    keeps.Add(Keep(element, names, file));
                     break;
                 case "builtIn":
-                    builtIns.Add(BuiltIn(element, binary, file));
+                    builtIns.Add(BuiltIn(element, file));
                     break;
                 case "pnrAnchor":
-                    anchors.Add(Anchor(element, binary, file));
+                    anchors.Add(Anchor(element, file));
                     break;
                 default:
                     throw Invalid(file, $"has an unknown element <{element.Name.LocalName}>");
@@ -288,7 +258,7 @@ public static class RecognizerConfiguration
         }
 
         Require(anchors.Count > 0, file, "must declare at least one <pnrAnchor>");
-        foreach (var anchor in anchors.Where(a => a.Keys.Count == 0 && a.Within is null))
+        foreach (var anchor in anchors.Where(a => a.Within is null))
         {
             string neighbour = anchor.After ?? anchor.Before!;
             Require(names.Contains(neighbour), file, $"pnrAnchor neighbour '{neighbour}' is not a declared format or keep");
@@ -304,64 +274,58 @@ public static class RecognizerConfiguration
     /// <summary>
     /// Reads one &lt;format&gt;.
     /// </summary>
-    private static DetectionFormat Format(XElement element, bool binary, HashSet<string> names, string file)
+    private static DetectionFormat Format(XElement element, HashSet<string> names, string file)
     {
-        Attributes(element, file, "name", "entity", "score", "action", "maskCharacter", "replacement");
+        Attributes(element, file, "name", "entity", "score", "maskCharacter");
         string name = Name(element, names, file);
         string entity = element.Attribute("entity")?.Value ?? "";
         Require(Regex.IsMatch(entity, "\\A[A-Z][A-Z_]*\\z", RegexOptions.CultureInvariant), file, $"format '{name}' needs an upper-case entity");
-        var (action, mask, replacement) = Protection(element, binary, file, name);
-        Children(element, file, "pattern", "context", "key");
+        char mask = MaskCharacter(element.Attribute("maskCharacter")?.Value ?? "*", file, name);
+        Children(element, file, "pattern", "context");
         var patterns = Texts(element, "pattern");
-        var keys = Texts(element, "key");
-        Require(patterns.Count + keys.Count > 0, file, $"format '{name}' needs a <pattern> or <key>");
-        Require(!binary || keys.Count == 0, file, $"format '{name}': <key> applies to JSON feeds only");
-        return new DetectionFormat(name, entity, Number(element, "score", 0.85, file), action, mask, replacement,
-            patterns, Texts(element, "context"), keys, Compile(patterns, file, name));
+        Require(patterns.Count > 0, file, $"format '{name}' needs a <pattern>");
+        return new DetectionFormat(name, entity, Number(element, "score", 0.85, file), mask, patterns, Texts(element, "context"),
+            Compile(patterns, file, name));
     }
 
     /// <summary>
     /// Reads one &lt;keep&gt;.
     /// </summary>
-    private static KeepFormat Keep(XElement element, bool binary, HashSet<string> names, string file)
+    private static KeepFormat Keep(XElement element, HashSet<string> names, string file)
     {
         Attributes(element, file, "name", "scan");
         string name = Name(element, names, file);
-        Children(element, file, "pattern", "key");
+        Children(element, file, "pattern");
         var patterns = Texts(element, "pattern");
-        var keys = Texts(element, "key");
-        Require(patterns.Count + keys.Count > 0, file, $"keep '{name}' needs a <pattern> or <key>");
-        Require(!binary || keys.Count == 0, file, $"keep '{name}': <key> applies to JSON feeds only");
+        Require(patterns.Count > 0, file, $"keep '{name}' needs a <pattern>");
         bool scan = element.Attribute("scan")?.Value switch
         {
             null or "false" => false,
             "true" => true,
             _ => throw Invalid(file, $"keep '{name}' scan must be true or false")
         };
-        return new KeepFormat(name, patterns, keys, scan, Compile(patterns, file, name));
+        return new KeepFormat(name, patterns, scan, Compile(patterns, file, name));
     }
 
     /// <summary>
     /// Reads one &lt;builtIn&gt;.
     /// </summary>
-    private static BuiltInEntity BuiltIn(XElement element, bool binary, string file)
+    private static BuiltInEntity BuiltIn(XElement element, string file)
     {
-        Attributes(element, file, "entity", "action", "maskCharacter", "replacement");
+        Attributes(element, file, "entity", "maskCharacter");
         string entity = element.Attribute("entity")?.Value ?? "";
         Require(SupportedBuiltIns.Contains(entity), file, $"builtIn entity '{entity}' is not supported");
         Require(!element.HasElements, file, "builtIn takes no child elements");
-        var (action, mask, replacement) = Protection(element, binary, file, entity);
-        return new BuiltInEntity(entity, action, mask, replacement);
+        return new BuiltInEntity(entity, MaskCharacter(element.Attribute("maskCharacter")?.Value ?? "*", file, entity));
     }
 
     /// <summary>
     /// Reads one &lt;pnrAnchor&gt;.
     /// </summary>
-    private static PnrAnchor Anchor(XElement element, bool binary, string file)
+    private static PnrAnchor Anchor(XElement element, string file)
     {
         Attributes(element, file, "after", "before", "offset", "optional", "within");
-        Children(element, file, "key", "pattern");
-        var keys = Texts(element, "key");
+        Children(element, file, "pattern");
         string? after = element.Attribute("after")?.Value;
         string? before = element.Attribute("before")?.Value;
         string? within = element.Attribute("within")?.Value;
@@ -371,43 +335,20 @@ public static class RecognizerConfiguration
             "true" => true,
             _ => throw Invalid(file, "pnrAnchor optional must be true or false")
         };
-        if (binary && within is not null)
+        if (within is not null)
         {
             var patterns = Texts(element, "pattern");
-            Require(keys.Count == 0 && after is null && before is null && element.Attribute("offset") is null && patterns.Count == 1, file,
+            Require(after is null && before is null && element.Attribute("offset") is null && patterns.Count == 1, file,
                 "an embedded pnrAnchor needs within and exactly one <pattern>");
             var capture = Compile(patterns, file, "pnrAnchor")[0];
             Require(capture.GetGroupNames().Contains("pnr"), file, "an embedded pnrAnchor pattern needs a (?<pnr>...) group");
-            return new PnrAnchor(null, null, 0, optional, [], within, capture);
+            return new PnrAnchor(null, null, 0, optional, within, capture);
         }
         Require(!element.Elements("pattern").Any(), file, "<pattern> applies to an embedded pnrAnchor only");
-        if (binary)
-        {
-            Require(keys.Count == 0 && (after is null) != (before is null), file, "a binary pnrAnchor needs exactly one of after or before");
-            int offset = (int)Number(element, "offset", 1, file);
-            Require(offset is >= 1 and <= 8, file, "pnrAnchor offset must be 1 to 8");
-            return new PnrAnchor(after, before, offset, optional, []);
-        }
-        Require(keys.Count > 0 && after is null && before is null && within is null && element.Attribute("offset") is null, file, "a JSON pnrAnchor needs <key> children only");
-        return new PnrAnchor(null, null, 0, optional, keys);
-    }
-
-    /// <summary>
-    /// Reads and checks the protection attributes of a format or built-in.
-    /// </summary>
-    private static (DetectionAction Action, char Mask, string Replacement) Protection(XElement element, bool binary, string file, string name)
-    {
-        var action = element.Attribute("action")?.Value switch
-        {
-            null or "Mask" => DetectionAction.Mask,
-            "Replace" => DetectionAction.Replace,
-            _ => throw Invalid(file, $"'{name}' action must be Mask or Replace")
-        };
-        char mask = MaskCharacter(element.Attribute("maskCharacter")?.Value ?? "*", file, name);
-        string replacement = element.Attribute("replacement")?.Value ?? "";
-        Require(action == DetectionAction.Mask || (!binary && replacement.Length > 0), file,
-            $"'{name}': Replace needs a replacement and is allowed in JSON feeds only (binary values keep their width)");
-        return (action, mask, replacement);
+        Require((after is null) != (before is null), file, "a pnrAnchor needs exactly one of after or before");
+        int offset = (int)Number(element, "offset", 1, file);
+        Require(offset is >= 1 and <= 8, file, "pnrAnchor offset must be 1 to 8");
+        return new PnrAnchor(after, before, offset, optional);
     }
 
     /// <summary>
@@ -469,7 +410,7 @@ public static class RecognizerConfiguration
 
     /// <summary>
     /// Returns the text of each child element with this name; patterns keep their exact text (a leading space can be
-    /// part of a value), keys and context words are trimmed.
+    /// part of a value) and context words are trimmed.
     /// </summary>
     private static IReadOnlyList<string> Texts(XElement element, string name) =>
         element.Elements(name).Select(child => name == "pattern" ? child.Value : child.Value.Trim()).ToArray();

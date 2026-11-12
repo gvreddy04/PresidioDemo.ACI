@@ -33,8 +33,8 @@ public static class DetectionRun
     /// Returns the decoded-text codec of a feed.
     /// </summary>
     /// <param name="feed">The feed route.</param>
-    /// <returns>The generic XDR codec for binary feeds, the JSON codec otherwise.</returns>
-    public static IFeedCodec Codec(FeedType feed) => SampleFiles.IsBinary(feed) ? FeedCodecRegistry.Create(feed) : FeedCodecRegistry.Create(feed);
+    /// <returns>The generic XDR codec.</returns>
+    public static IFeedCodec Codec(FeedType feed) => FeedCodecRegistry.Create(feed);
 
     /// <summary>
     /// Loads the recognizer sets and configures the Python bridge. Python must be started.

@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using PresidioDemo.Core.Decoder;
 using PresidioDemo.Core.Logging;
 using PresidioDemo.Core.Models;
@@ -25,7 +24,7 @@ public sealed record ParityException(string Sample, string Location, string Reas
 /// </summary>
 /// <param name="Sample">The sample file name.</param>
 /// <param name="Feed">The feed folder name.</param>
-/// <param name="Location">The payload offset of the string (binary) or its JSON path.</param>
+/// <param name="Location">The payload offset of the string.</param>
 /// <param name="Length">The string length.</param>
 /// <param name="Reason">Why masking it is accepted.</param>
 public sealed record FalsePositiveEntry(string Sample, string Feed, string Location, int Length, string Reason);
@@ -35,7 +34,7 @@ public sealed record FalsePositiveEntry(string Sample, string Feed, string Locat
 /// </summary>
 /// <param name="Sample">The sample file name.</param>
 /// <param name="Feed">The feed folder name.</param>
-/// <param name="Location">The payload offset or JSON path.</param>
+/// <param name="Location">The payload offset.</param>
 /// <param name="Length">The value length.</param>
 /// <param name="Entity">The baseline entity, or empty for a false positive.</param>
 /// <param name="Shape">The character shape of the value.</param>
@@ -148,9 +147,9 @@ public static class Spike
     /// Returns whether a baseline location is protected in the decoded-text output, with the before and after text.
     /// </summary>
     /// <param name="result">The sample result.</param>
-    /// <param name="location">The payload offset or JSON path.</param>
+    /// <param name="location">The payload offset.</param>
     /// <param name="length">The value length.</param>
-    /// <returns>Caught when every non-<c>*</c> character changed (binary) or the JSON value changed.</returns>
+    /// <returns>Caught when every non-<c>*</c> character changed.</returns>
     private static (bool Caught, string Before, string After, DetectionEvent? Event) Inspect(SampleResult result, string location, int length)
     {
         string before = Value(result.Original, result, location, length, original: true);
@@ -159,9 +158,7 @@ public static class Spike
             return (true, before, "", null);
         }
         string after = Value(result.Output, result, location, length, original: false);
-        bool caught = SampleFiles.IsBinary(result.Feed)
-            ? before.Zip(after).All(pair => pair.First == '*' || pair.First != pair.Second)
-            : before != after;
+        bool caught = before.Zip(after).All(pair => pair.First == '*' || pair.First != pair.Second);
         return (caught, before, after, Containing(result, location, length));
     }
 
@@ -171,22 +168,12 @@ public static class Spike
     private static string Value(SampleResult result, string location, int length) => Value(result.Original, result, location, length, original: true);
 
     /// <summary>
-    /// Returns the value at a location in a message: payload bytes for binary feeds, the JSON scalar for JSON feeds.
+    /// Returns the payload bytes at a location in a message.
     /// </summary>
     private static string Value(byte[] message, SampleResult result, string location, int length, bool original)
     {
         byte[] payload = FeedPayloadReader.ReadPayload(new FeedMessage(new FeedDelivery(result.Feed, Guid.NewGuid(), Path.GetFileName(result.Path), result.Path), message));
-        if (SampleFiles.IsBinary(result.Feed))
-        {
-            return Encoding.ASCII.GetString(payload, int.Parse(location, System.Globalization.CultureInfo.InvariantCulture), length);
-        }
-        JsonNode? node = JsonNode.Parse(payload);
-        foreach (string segment in location.Split('/', StringSplitOptions.RemoveEmptyEntries))
-        {
-            string key = segment.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal);
-            node = node is JsonArray array && int.TryParse(key, out int index) ? array[index] : node?[key];
-        }
-        return node is JsonValue value && value.TryGetValue(out string? text) ? text : node?.ToJsonString() ?? "";
+        return Encoding.ASCII.GetString(payload, int.Parse(location, System.Globalization.CultureInfo.InvariantCulture), length);
     }
 
     /// <summary>
@@ -198,15 +185,9 @@ public static class Spike
         {
             return null;
         }
-        if (SampleFiles.IsBinary(result.Feed))
-        {
-            int offset = int.Parse(location, System.Globalization.CultureInfo.InvariantCulture);
-            var candidate = XdrFeedDecoder.Candidates(result.Parsed).FirstOrDefault(c => offset >= c.Offset && offset + length <= c.Offset + c.Length);
-            return candidate is null ? null : result.Outcome.Events.FirstOrDefault(e => e.Slot == candidate.Slot);
-        }
-        var strings = JsonFeedParser.StringFields(result.Parsed);
-        int slot = strings.ToList().FindIndex(f => f.Id == location);
-        return slot < 0 ? null : result.Outcome.Events.FirstOrDefault(e => e.Slot == slot);
+        int offset = int.Parse(location, System.Globalization.CultureInfo.InvariantCulture);
+        var candidate = XdrFeedDecoder.Candidates(result.Parsed).FirstOrDefault(c => offset >= c.Offset && offset + length <= c.Offset + c.Length);
+        return candidate is null ? null : result.Outcome.Events.FirstOrDefault(e => e.Slot == candidate.Slot);
     }
 
     /// <summary>
@@ -216,34 +197,21 @@ public static class Spike
     {
         string feed = FeedCatalog.Get(result.Feed).FolderName;
         string sample = Path.GetFileName(result.Path);
-        if (SampleFiles.IsBinary(result.Feed))
+        foreach (var candidate in XdrFeedDecoder.Candidates(result.Parsed!))
         {
-            foreach (var candidate in XdrFeedDecoder.Candidates(result.Parsed!))
+            bool protectedToday = entries.Any(e => int.Parse(e.Location, System.Globalization.CultureInfo.InvariantCulture) is var o && o >= candidate.Offset && o < candidate.Offset + candidate.Length);
+            if (!protectedToday && result.Outcome!.Values[XdrFeedDecoder.SlotId(candidate.Slot)] != candidate.Value)
             {
-                bool protectedToday = entries.Any(e => int.Parse(e.Location, System.Globalization.CultureInfo.InvariantCulture) is var o && o >= candidate.Offset && o < candidate.Offset + candidate.Length);
-                if (!protectedToday && result.Outcome!.Values[XdrFeedDecoder.SlotId(candidate.Slot)] != candidate.Value)
-                {
-                    var evt = result.Outcome.Events[candidate.Slot];
-                    yield return new SpikeFinding(sample, feed, candidate.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture), candidate.Length, "", evt.Shape, DetectionLog.Decision(evt.Decision), evt.Format);
-                }
-            }
-            yield break;
-        }
-        var strings = JsonFeedParser.StringFields(result.Parsed!);
-        for (int slot = 0; slot < strings.Count; slot++)
-        {
-            var field = strings[slot];
-            if (!entries.Any(e => e.Location == field.Id) && result.Outcome!.Values[field.Id] != field.Value)
-            {
-                var evt = result.Outcome.Events[slot];
-                yield return new SpikeFinding(sample, feed, field.Id, field.Value.Length, "", evt.Shape, DetectionLog.Decision(evt.Decision), evt.Format);
+                var evt = result.Outcome.Events[candidate.Slot];
+                yield return new SpikeFinding(sample, feed, candidate.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture), candidate.Length, "", evt.Shape, DetectionLog.Decision(evt.Decision), evt.Format);
             }
         }
     }
 
     /// <summary>
-    /// Measures messages per second for one process (one ECS task) with spaCy NER on, per feed and overall, and the
-    /// task count that sustains 2,000 messages per second if the peak is shared equally by the five feeds.
+    /// Measures messages per second for one process (one ECS task) with spaCy NER on, and the task count that sustains
+    /// the PNR feed's sizing peak of 400 messages per second (its share of the 2,000 messages per second sized for the
+    /// airline feeds before this branch kept PNR only).
     /// </summary>
     private static async Task<object> Throughput(DetectingFeedProtector protector, IReadOnlyList<string> samples, int rounds)
     {
@@ -266,11 +234,11 @@ public static class Spike
             }
         }
         total.Stop();
-        const double peak = 2000, feeds = 5;
+        const double peakPerFeed = 400;
         var rows = perFeed.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p =>
         {
             double rate = p.Value.Messages / p.Value.Seconds;
-            return new { Feed = p.Key, MessagesPerSecondPerTask = Math.Round(rate, 1), TasksForEqualShareOfPeak = (int)Math.Ceiling(peak / feeds / rate) };
+            return new { Feed = p.Key, MessagesPerSecondPerTask = Math.Round(rate, 1), TasksForEqualShareOfPeak = (int)Math.Ceiling(peakPerFeed / rate) };
         }).ToArray();
         return new
         {
@@ -280,7 +248,7 @@ public static class Spike
             MessagesPerSecondPerTask = Math.Round(messages / total.Elapsed.TotalSeconds, 1),
             Feeds = rows,
             TasksForPeak = rows.Sum(r => r.TasksForEqualShareOfPeak),
-            Assumption = "2,000 msg/s shared equally by the five feeds; one worker process per ECS task"
+            Assumption = "400 msg/s peak for the PNR feed; one worker process per ECS task"
         };
     }
 

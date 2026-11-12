@@ -23,7 +23,7 @@ static class FeedTransactionLogChecks
                 [new("/Name", "/Name", "Emily Carter")], [new("/Name", "/Name", "[PERSON]")]);
             // The harness passes the values-mode detection block; a fictional one is enough to check its place.
             string block = "PNR 0 DETECTION PUBLISHED strings=1 pii=1 non-pii=0 review=0" + Environment.NewLine + "  PII fields (changed)" + Environment.NewLine
-                + "    \"/Name\"  \"Emily Carter\" -> \"[PERSON]\"  format=name entity=PERSON score=0.90 decision=replaced" + Environment.NewLine;
+                + "    slot 0 @0x0009  \"Emily Carter\" -> \"[PERSON]\"  format=name entity=PERSON score=0.90 decision=masked" + Environment.NewLine;
             string text = FeedLoggers.Format(input, result, null, block);
             string[] sections = text.Split("AFTER ANONYMIZATION");
             Require(sections.Length == 2 && sections[0].Contains("Emily Carter") && !sections[1].Contains("Emily Carter") && sections[1].Contains("[PERSON]"), "Comparison sections mix original and protected data.");

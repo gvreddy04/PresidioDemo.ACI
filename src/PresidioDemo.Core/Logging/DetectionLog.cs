@@ -15,7 +15,7 @@ namespace PresidioDemo.Core.Logging;
 public enum DetectionGroup
 {
     /// <summary>
-    /// Personal data: the string was changed after a detection (masked, replaced, masked-inside).
+    /// Personal data: the string was changed after a detection (masked, masked-inside).
     /// </summary>
     Pii,
     /// <summary>
@@ -33,15 +33,15 @@ public enum DetectionGroup
 
 /// <summary>
 /// Formats the detection log (WR-018): one block per message, with a header line and the decoded strings listed in the
-/// PII, non-PII and review groups, each exactly once. A JSON string is located by its JSON Pointer, a binary string by its
-/// slot and payload byte offset. Value-free unless decoded values are passed, which happens only with
+/// PII, non-PII and review groups, each exactly once. A string is located by its slot and payload byte offset.
+/// Value-free unless decoded values are passed, which happens only with
 /// <c>Presidio:DetectionLogValues</c> on in a non-production environment (WR-020). Written only while
 /// <c>Presidio:DetectionLog</c> is on.
 /// </summary>
 /// <remarks>
 /// The header starts in the first column and every other line is indented, so a log collector can treat each block as one
-/// entry (a multiline start pattern of <c>^\S</c>). Values, pointers and reasons are JSON-encoded, so none of them can
-/// break a line or start a forged entry.
+/// entry (a multiline start pattern of <c>^\S</c>). Values and reasons are JSON-encoded, so neither can break a line or
+/// start a forged entry.
 /// </remarks>
 public static class DetectionLog
 {
@@ -57,12 +57,6 @@ public static class DetectionLog
     /// The indent of a group heading.
     /// </summary>
     private const string GroupIndent = "  ";
-
-    /// <summary>
-    /// The widest location the entries are aligned to; a longer location (such as a long encoded pointer under WR-020) is
-    /// written unpadded, so one long location cannot widen every line of the block.
-    /// </summary>
-    private const int MaximumPadding = 48;
 
     /// <summary>
     /// Encodes values readably (an apostrophe stays an apostrophe) while still escaping quotes, backslashes and control
@@ -82,7 +76,6 @@ public static class DetectionLog
     public static string Decision(DetectionDecision decision) => decision switch
     {
         DetectionDecision.Masked => "masked",
-        DetectionDecision.Replaced => "replaced",
         DetectionDecision.Kept => "kept",
         DetectionDecision.MaskedInside => "masked-inside",
         DetectionDecision.Anchor => "anchor",
@@ -92,7 +85,7 @@ public static class DetectionLog
     };
 
     /// <summary>
-    /// Encodes a value, pointer, property name or reason as one JSON string. Beyond JSON's own escapes, the relaxed encoder
+    /// Encodes a value or reason as one JSON string. Beyond JSON's own escapes, the relaxed encoder
     /// already escapes line and paragraph separators; zero-width and bidirectional formatting characters are escaped too, so
     /// a value can neither break its line nor change how the rest of the line displays.
     /// </summary>
@@ -126,18 +119,14 @@ public static class DetectionLog
     public static string FormatBlock(FeedType feed, Guid transaction, IReadOnlyList<DetectionEvent> events, string? rejectReason = null,
         IReadOnlyList<string>? before = null, IReadOnlyList<string>? after = null)
     {
-        bool binary = feed is FeedType.PNR;
         var groups = Enumerable.Range(0, events.Count).ToLookup(i => Group(events[i].Decision));
-        var locations = events.Select(e => Location(e, binary, before is not null)).ToArray();
-        int width = Math.Min(locations.Select(location => location.Length).DefaultIfEmpty(0).Max(), MaximumPadding);
+        var locations = events.Select(Location).ToArray();
+        int width = locations.Select(location => location.Length).DefaultIfEmpty(0).Max();
 
         var block = new StringBuilder();
         block.Append(CultureInfo.InvariantCulture,
             $"{FeedCatalog.Get(feed).FolderName} {transaction:N} DETECTION {(rejectReason is null ? "PUBLISHED" : "DEAD-LETTERED")} strings={events.Count} pii={groups[DetectionGroup.Pii].Count()} non-pii={groups[DetectionGroup.NonPii].Count()} review={groups[DetectionGroup.Review].Count()}");
-        if (binary)
-        {
-            block.Append(" offsets=payload");
-        }
+        block.Append(" offsets=payload");
         if (rejectReason is not null)
         {
             block.Append(" reason=").Append(Encode(rejectReason));
@@ -176,7 +165,7 @@ public static class DetectionLog
     /// <returns>The group.</returns>
     public static DetectionGroup Group(DetectionDecision decision) => decision switch
     {
-        DetectionDecision.Masked or DetectionDecision.Replaced or DetectionDecision.MaskedInside => DetectionGroup.Pii,
+        DetectionDecision.Masked or DetectionDecision.MaskedInside => DetectionGroup.Pii,
         DetectionDecision.Kept or DetectionDecision.Anchor => DetectionGroup.NonPii,
         DetectionDecision.MaskedByDefault or DetectionDecision.MissedBelowThreshold => DetectionGroup.Review,
         _ => throw new ArgumentOutOfRangeException(nameof(decision))
@@ -198,27 +187,13 @@ public static class DetectionLog
     private static bool IsFormatting(char c) => c is >= (char)0x200B and <= (char)0x200F or >= (char)0x202A and <= (char)0x202E or >= (char)0x2066 and <= (char)0x2069;
 
     /// <summary>
-    /// Returns where a string sits: <c>slot 12 @0x01A4</c> for a binary string; for JSON, the value-free pointer, or the
-    /// full JSON-encoded pointer under WR-020.
+    /// Returns where a string sits: <c>slot 12 @0x01A4</c>, or <c>slot 12</c> when the codec reported no offset.
     /// </summary>
     /// <param name="e">The event.</param>
-    /// <param name="binary">Whether the feed is binary.</param>
-    /// <param name="withValues">Whether the block carries values.</param>
     /// <returns>The location text.</returns>
-    private static string Location(DetectionEvent e, bool binary, bool withValues)
-    {
-        if (binary)
-        {
-            return e.Offset is int offset
-                ? string.Create(CultureInfo.InvariantCulture, $"slot {e.Slot} @0x{offset:X4}")
-                : string.Create(CultureInfo.InvariantCulture, $"slot {e.Slot}");
-        }
-        if (withValues && e.Pointer.Length > 0)
-        {
-            return Encode(e.Pointer);
-        }
-        return e.SafePointer.Length > 0 ? e.SafePointer : "-";
-    }
+    private static string Location(DetectionEvent e) => e.Offset is int offset
+        ? string.Create(CultureInfo.InvariantCulture, $"slot {e.Slot} @0x{offset:X4}")
+        : string.Create(CultureInfo.InvariantCulture, $"slot {e.Slot}");
 
     /// <summary>
     /// Returns an entry's value part: <c>"before" -> "after"</c> or <c>"before"</c> under WR-020, otherwise

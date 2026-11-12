@@ -4,8 +4,7 @@ using PresidioDemo.Core.Models;
 namespace PresidioDemo.Core.Pipeline;
 
 /// <summary>
-/// Selects the decoded-text codec for a delivery route: the generic XDR codec for binary feeds (no per-feed schema),
-/// the shared JSON codec for JSON feeds.
+/// Selects the decoded-text codec for a delivery route: the generic XDR codec (no per-feed schema).
 /// </summary>
 public static class FeedCodecRegistry
 {

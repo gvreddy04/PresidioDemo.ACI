@@ -53,11 +53,11 @@ public static class ConfigurationChecks
             Reject(scratch, valid.Replace("<pnrAnchor after=\"creationTime\" offset=\"1\" />", ""), "a missing PNR anchor", ref passed);
             Reject(scratch, valid.Replace("after=\"creationTime\"", "after=\"noSuchFormat\""), "an anchor neighbour that does not exist", ref passed);
             Reject(scratch, valid.Replace("<format name=\"creationTime\" entity=\"UNCLASSIFIED_IDENTIFIER\" score=\"0.85\" maskCharacter=\"*\">",
-                "<format name=\"creationTime\" entity=\"UNCLASSIFIED_IDENTIFIER\" action=\"Replace\" replacement=\"[X]\">"), "Replace in a binary feed", ref passed);
+                "<format name=\"creationTime\" entity=\"UNCLASSIFIED_IDENTIFIER\" action=\"Replace\" replacement=\"[X]\">"), "a Replace action (binary values keep their width)", ref passed);
             Reject(scratch, valid.Replace("<builtIn entity=\"PERSON\" />", "<builtIn entity=\"PASSPORT\" />"), "an unsupported built-in", ref passed);
             Reject(scratch, valid.Replace("<keep name=\"time\">", "<keep name=\"time\" colour=\"red\">"), "an unknown attribute", ref passed);
             Reject(scratch, valid.Replace("<keep name=\"time\"><pattern>\\d{4}</pattern></keep>", "<keep name=\"time\"><pattern>\\d{4}</pattern></keep><rule />"), "an unknown element", ref passed);
-            Reject(scratch, valid.Replace("<keep name=\"time\"><pattern>\\d{4}</pattern></keep>", "<keep name=\"time\"><key>Time</key></keep>"), "a key in a binary feed", ref passed);
+            Reject(scratch, valid.Replace("<keep name=\"time\"><pattern>\\d{4}</pattern></keep>", "<keep name=\"time\"><key>Time</key></keep>"), "a key element", ref passed);
             Reject(scratch, valid.Replace("defaultMaskCharacter=\"#\"", "defaultMaskCharacter=\"##\""), "a two-character mask", ref passed);
         }
         finally
