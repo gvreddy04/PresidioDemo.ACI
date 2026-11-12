@@ -6,7 +6,7 @@ import tempfile
 
 PROJECT = Path(__file__).resolve().parents[2]
 HARNESS = PROJECT / "tests" / "FeedPipelineHarness" / "bin" / "Debug" / "net10.0" / "FeedPipelineHarness.dll"
-FEEDS = ["ETKT", "PNR", "PNR-Linking", "Seats", "ACI"]
+FEEDS = ["PNR"]
 RUNS = PROJECT / ".test-runs"
 
 

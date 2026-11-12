@@ -1,9 +1,8 @@
-"""All feeds through the real workers, the generic decoders and local Presidio (V-07, V-08, V-05 through the harness)."""
-import json
+"""The PNR feed through the real workers, the generic decoder and local Presidio (V-07, V-08, V-05 through the harness)."""
 import struct
 import unittest
 
-from decoded_text_support import EXPECTED_REJECTIONS, PROJECT, baseline, json_value, payload, verify_published
+from decoded_text_support import EXPECTED_REJECTIONS, PROJECT, baseline, payload, verify_published
 from pipeline_harness import run
 from test_feed_logs import blocks, leaked_values
 
@@ -36,39 +35,29 @@ class DecodedTextFeedTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         inputs = {f"{p.parent.name}/{p.name}": p.read_bytes() for p in sorted(SAMPLES.rglob("*.txt"))}
-        aci = (SAMPLES / "ACI" / "ACI.txt").read_bytes()
-        # A template change: the producer appends a new 4+ character string after the last ACI field.
+        pnr = (SAMPLES / "PNR" / "PNR.txt").read_bytes()
+        # A template change: the producer appends a new 4+ character string after the last PNR field.
         cls.added_text = "NEWFIELD9"
-        inputs["ACI/template-added-field.bin"] = payload(aci) + counted(cls.added_text)
-        linking = json.loads(payload((SAMPLES / "PNR-Linking" / "PNR_LINKING.txt").read_bytes()))
-        linking[0]["NewContactNote"] = "CALL JORDAN MILLER 3125550142"
-        inputs["PNR-Linking/template-added-key.bin"] = json.dumps(linking, separators=(",", ":")).encode("utf-8")
-        # Template changes (AC-007): ACI string 6 removed, and strings 1 and 2 swapped (the PNR, string 9, and the
-        # passenger name after it stay in place); a PNR-Linking key removed, and every key order reversed.
-        aci_payload = payload(aci)
-        segments = xdr_segments(aci_payload)
-        assert len(segments) == 17, "ACI.txt layout changed; choose new template-change fields"
-        start, end = segments[6]
-        inputs["ACI/template-removed-field.bin"] = aci_payload[:start] + aci_payload[end:]
+        inputs["PNR/template-added-field.bin"] = payload(pnr) + counted(cls.added_text)
+        # Template changes (AC-007): PNR string 20 removed, and strings 1 and 2 swapped (the creation time, string 4, and
+        # the PNR after it stay in place).
+        pnr_payload = payload(pnr)
+        segments = xdr_segments(pnr_payload)
+        assert len(segments) == 89, "PNR.txt layout changed; choose new template-change fields"
+        start, end = segments[20]
+        inputs["PNR/template-removed-field.bin"] = pnr_payload[:start] + pnr_payload[end:]
         (a0, a1), (b0, b1) = segments[1], segments[2]
-        inputs["ACI/template-reordered-fields.bin"] = (aci_payload[:a0] + aci_payload[b0:b1] + aci_payload[a1:b0]
-                                                       + aci_payload[a0:a1] + aci_payload[b1:])
-        removed = json.loads(payload((SAMPLES / "PNR-Linking" / "PNR_LINKING.txt").read_bytes()))
-        del removed[0]["ChangeReason"]
-        inputs["PNR-Linking/template-removed-key.bin"] = json.dumps(removed, separators=(",", ":")).encode("utf-8")
-        reordered = json.loads(payload((SAMPLES / "PNR-Linking" / "PNR_LINKING.txt").read_bytes()))
-        reordered[0] = dict(reversed(list(reordered[0].items())))
-        reordered[0]["Customers"] = [dict(reversed(list(c.items()))) for c in reordered[0]["Customers"]]
-        inputs["PNR-Linking/template-reordered-keys.bin"] = json.dumps(reordered, separators=(",", ":")).encode("utf-8")
+        inputs["PNR/template-reordered-fields.bin"] = (pnr_payload[:a0] + pnr_payload[b0:b1] + pnr_payload[a1:b0]
+                                                       + pnr_payload[a0:a1] + pnr_payload[b1:])
         cls.inputs = inputs
-        cls.harness = run(inputs, extra_args=["--detection-log", "on"], expect=2, prefix="decoded-text-")
+        cls.harness = run(inputs, extra_args=["--detection-log", "on"], expect=2 if EXPECTED_REJECTIONS else 0, prefix="decoded-text-")
         cls.addClassCleanup(cls.harness.cleanup)
 
-    def test_eighteen_samples_published_and_two_rejected_with_their_reasons(self):
+    def test_both_pnr_samples_published_and_negative_samples_rejected_with_their_reasons(self):
         items = [i for i in self.harness.report["Items"] if "template-" not in i["Source"]]
         published = [i for i in items if i["Status"] == "Published"]
         rejected = {i["Source"].replace("\\", "/").rsplit("/", 1)[-1]: i["Reason"] for i in items if i["Status"] == "Rejected"}
-        self.assertEqual(len(published), 18)
+        self.assertEqual(len(published), 2)
         self.assertEqual(set(rejected), set(EXPECTED_REJECTIONS))
         for name, reason in EXPECTED_REJECTIONS.items():
             self.assertIn(reason, rejected[name])
@@ -88,46 +77,28 @@ class DecodedTextFeedTests(unittest.TestCase):
         self.assertEqual(totals["pnrs_unchanged"], len(document["pnrs"]))
 
     def test_template_changes_still_publish_and_mask_the_new_value(self):
-        aci = payload(self.harness.published("ACI", "template-added-field.bin"))
-        self.assertTrue(aci.endswith(counted("*" * len(self.added_text))), "the added ACI string is masked in full")
-        linking = json.loads(self.harness.published("PNR-Linking", "template-added-key.bin"))
-        self.assertNotIn("JORDAN", linking[0]["NewContactNote"])
-        self.assertEqual(len(linking[0]["NewContactNote"]), len("CALL JORDAN MILLER 3125550142"))
+        pnr = payload(self.harness.published("PNR", "template-added-field.bin"))
+        masked = [counted(mask * len(self.added_text)) for mask in "#*"]
+        self.assertTrue(any(pnr.endswith(m) for m in masked), "the added PNR string is masked in full")
 
     def test_removed_and_reordered_template_fields_still_publish_protected(self):
         document, exceptions = baseline()
-        aci = payload((SAMPLES / "ACI" / "ACI.txt").read_bytes())
-        published = payload(self.harness.published("ACI", "ACI.txt"))
+        pnr = payload((SAMPLES / "PNR" / "PNR.txt").read_bytes())
+        published = payload(self.harness.published("PNR", "PNR.txt"))
         # Values the unchanged sample protects must stay protected; short values and listed exceptions are not checked.
-        values = [aci[int(e["location"]):int(e["location"]) + e["length"]] for e in document["protected"]
-                  if e["sample"] == "ACI.txt" and e["length"] >= 4 and ("ACI.txt", e["location"]) not in exceptions]
+        values = [pnr[int(e["location"]):int(e["location"]) + e["length"]] for e in document["protected"]
+                  if e["sample"] == "PNR.txt" and e["length"] >= 4 and ("PNR.txt", e["location"]) not in exceptions]
         values = [v for v in values if v not in published]
-        pnrs = [aci[int(e["location"]):int(e["location"]) + e["length"]] for e in document["pnrs"] if e["sample"] == "ACI.txt"]
+        pnrs = [pnr[int(e["location"]):int(e["location"]) + e["length"]] for e in document["pnrs"] if e["sample"] == "PNR.txt"]
         self.assertTrue(values and pnrs)
         for name in ("template-removed-field.bin", "template-reordered-fields.bin"):
-            output = payload(self.harness.published("ACI", name))
-            self.assertFalse(any(v in output for v in values), f"{name}: a protected ACI value was published")
-            self.assertTrue(all(p in output for p in pnrs), f"{name}: the ACI PNR changed")
-        original = json.loads(payload((SAMPLES / "PNR-Linking" / "PNR_LINKING.txt").read_bytes()))
-        for name in ("template-removed-key.bin", "template-reordered-keys.bin"):
-            output = json.loads(self.harness.published("PNR-Linking", name))
-            for e in document["protected"]:
-                if (e["sample"] == "PNR_LINKING.txt" and "/ChangeReason" not in e["location"]
-                        and ("PNR_LINKING.txt", e["location"]) not in exceptions):
-                    self.assertFalse(json_value(output, e["location"]) == json_value(original, e["location"]),
-                                     f"{name}: {e['entity']} at {e['location']} was published unprotected")
-            for e in document["pnrs"]:
-                if e["sample"] == "PNR_LINKING.txt":
-                    self.assertTrue(json_value(output, e["location"]) == json_value(original, e["location"]),
-                                    f"{name}: PNR at {e['location']} changed")
-
-    def test_json_names_use_todays_replacement_token(self):
-        linking = json.loads(payload(self.harness.published("PNR-Linking", "PNR_LINKING.txt")))
-        self.assertEqual({c["FirstName"] for c in linking[0]["Customers"] if c.get("FirstName")}, {"[PASSENGER_NAME]"})
+            output = payload(self.harness.published("PNR", name))
+            self.assertFalse(any(v in output for v in values), f"{name}: a protected PNR value was published")
+            self.assertTrue(all(p in output for p in pnrs), f"{name}: the PNR changed")
 
     def test_detection_log_through_the_harness_is_value_free(self):
         found = blocks(self.harness.console)
-        self.assertGreater(sum(len(b["entries"]) for b in found), 400)
+        self.assertGreater(sum(len(b["entries"]) for b in found), 100)
         leaked = leaked_values("\n".join("\n".join(b["lines"][1:]) for b in found))
         self.assertEqual(leaked, [])
 

@@ -1,194 +1,29 @@
 {
   "parity": "PASS",
   "protected": {
-    "baseline": 211,
-    "caught": 190,
-    "missed": 21,
-    "approvedExceptions": 21,
+    "baseline": 104,
+    "caught": 97,
+    "missed": 7,
+    "approvedExceptions": 7,
     "unapproved": 0
   },
   "pnrs": {
-    "baseline": 17,
-    "unchanged": 17
+    "baseline": 2,
+    "unchanged": 2
   },
   "rebuilds": {
-    "production": 17,
-    "valid": 17
+    "production": 2,
+    "valid": 2
   },
   "falsePositives": 7,
   "unlistedFalsePositives": 0,
   "identicalToToday": {
-    "count": 8,
-    "of": 17,
-    "samples": [
-      "ACI.txt",
-      "ACI_02.txt",
-      "ACI_03.txt",
-      "ACI_04.txt",
-      "ACI_05.txt",
-      "PNR_LINKING.txt",
-      "SEATS.txt",
-      "SEATS_03.txt"
-    ]
+    "count": 0,
+    "of": 2,
+    "samples": []
   },
-  "negatives": [
-    {
-      "sample": "PNR_LINKING_02_Negative_Testing.txt",
-      "status": "published",
-      "reason": ""
-    },
-    {
-      "sample": "PNR_LINKING_03_Negative_Testing.txt",
-      "status": "rejected",
-      "reason": "A personal-data property holds a number or boolean that cannot be protected in its JSON type; input retained and no output was published."
-    },
-    {
-      "sample": "SEATS_02_Negative_Testing.txt",
-      "status": "rejected",
-      "reason": "JSON MQ exports require UTF-8 CCSID 1208; no implicit code-page conversion is performed."
-    }
-  ],
+  "negatives": [],
   "misses": [
-    {
-      "sample": "ACI_06.txt",
-      "feed": "ACI",
-      "location": "676",
-      "length": 3,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": " 9A",
-      "decision": "rejected",
-      "format": ""
-    },
-    {
-      "sample": "ACI_06.txt",
-      "feed": "ACI",
-      "location": "692",
-      "length": 1,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "A",
-      "decision": "rejected",
-      "format": ""
-    },
-    {
-      "sample": "ETKT.txt",
-      "feed": "ETKT",
-      "location": "48",
-      "length": 3,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "AAA",
-      "decision": "rejected",
-      "format": ""
-    },
-    {
-      "sample": "ETKT.txt",
-      "feed": "ETKT",
-      "location": "76",
-      "length": 4,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "9999",
-      "decision": "kept",
-      "format": "timeOrFlightNumber"
-    },
-    {
-      "sample": "ETKT_02.txt",
-      "feed": "ETKT",
-      "location": "48",
-      "length": 3,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "AAA",
-      "decision": "rejected",
-      "format": ""
-    },
-    {
-      "sample": "ETKT_02.txt",
-      "feed": "ETKT",
-      "location": "76",
-      "length": 4,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "9999",
-      "decision": "kept",
-      "format": "timeOrFlightNumber"
-    },
-    {
-      "sample": "ETKT_03.txt",
-      "feed": "ETKT",
-      "location": "48",
-      "length": 3,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "AAA",
-      "decision": "rejected",
-      "format": ""
-    },
-    {
-      "sample": "ETKT_03.txt",
-      "feed": "ETKT",
-      "location": "76",
-      "length": 4,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "9999",
-      "decision": "kept",
-      "format": "timeOrFlightNumber"
-    },
-    {
-      "sample": "ETKT_04.txt",
-      "feed": "ETKT",
-      "location": "48",
-      "length": 3,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "AAA",
-      "decision": "rejected",
-      "format": ""
-    },
-    {
-      "sample": "ETKT_04.txt",
-      "feed": "ETKT",
-      "location": "76",
-      "length": 4,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "9999",
-      "decision": "kept",
-      "format": "timeOrFlightNumber"
-    },
-    {
-      "sample": "ETKT_05.txt",
-      "feed": "ETKT",
-      "location": "48",
-      "length": 3,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "AAA",
-      "decision": "rejected",
-      "format": ""
-    },
-    {
-      "sample": "ETKT_05.txt",
-      "feed": "ETKT",
-      "location": "76",
-      "length": 4,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "9999",
-      "decision": "kept",
-      "format": "timeOrFlightNumber"
-    },
-    {
-      "sample": "ETKT_06.txt",
-      "feed": "ETKT",
-      "location": "48",
-      "length": 3,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "AAA",
-      "decision": "rejected",
-      "format": ""
-    },
-    {
-      "sample": "ETKT_06.txt",
-      "feed": "ETKT",
-      "location": "76",
-      "length": 4,
-      "entity": "UNCLASSIFIED_IDENTIFIER",
-      "shape": "9999",
-      "decision": "kept",
-      "format": "timeOrFlightNumber"
-    },
     {
       "sample": "PNR.txt",
       "feed": "PNR",
@@ -334,47 +169,18 @@
   ],
   "throughput": {
     "rounds": 20,
-    "messages": 340,
+    "messages": 40,
     "nlpNer": "on (spaCy en_core_web_lg)",
-    "messagesPerSecondPerTask": 46.1,
+    "messagesPerSecondPerTask": 10.6,
     "feeds": [
       {
-        "feed": "ACI",
-        "messagesPerSecondPerTask": 53.7,
-        "tasksForEqualShareOfPeak": 8
-      },
-      {
-        "feed": "ETKT",
-        "messagesPerSecondPerTask": 61.3,
-        "tasksForEqualShareOfPeak": 7
-      },
-      {
         "feed": "PNR",
-        "messagesPerSecondPerTask": 13.2,
-        "tasksForEqualShareOfPeak": 31
-      },
-      {
-        "feed": "PNR-Linking",
-        "messagesPerSecondPerTask": 161,
-        "tasksForEqualShareOfPeak": 3
-      },
-      {
-        "feed": "Seats",
-        "messagesPerSecondPerTask": 1449.4,
-        "tasksForEqualShareOfPeak": 1
+        "messagesPerSecondPerTask": 10.6,
+        "tasksForEqualShareOfPeak": 38
       }
     ],
-    "tasksForPeak": 50,
-    "assumption": "2,000 msg/s shared equally by the five feeds; one worker process per ECS task"
+    "tasksForPeak": 38,
+    "assumption": "400 msg/s peak for the PNR feed; one worker process per ECS task"
   },
-  "rejected": [
-    {
-      "sample": "PNR_LINKING_03_Negative_Testing.txt",
-      "reason": "A personal-data property holds a number or boolean that cannot be protected in its JSON type; input retained and no output was published."
-    },
-    {
-      "sample": "SEATS_02_Negative_Testing.txt",
-      "reason": "JSON MQ exports require UTF-8 CCSID 1208; no implicit code-page conversion is performed."
-    }
-  ]
+  "rejected": []
 }

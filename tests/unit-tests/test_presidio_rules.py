@@ -31,8 +31,8 @@ class DetectionBridgeTests(unittest.TestCase):
             "formats": [{"name": "demoCode", "entity": "DEMO_CODE", "score": 0.9, "patterns": [r"DEMO-\d{4}"], "context": []}]}))
         presidio_demo.configure_feed(json.dumps({"feed": "OnlyB", "builtIns": [], "formats": []}))
 
-    def test_all_five_feeds_configure(self):
-        self.assertEqual(sorted(self.feeds), ["ACI", "ETKT", "PNR", "PNR-Linking", "Seats"])
+    def test_the_pnr_feed_configures(self):
+        self.assertEqual(sorted(self.feeds), ["PNR"])
 
     def test_docs_record_returns_name_date_of_birth_and_gender_spans(self):
         found = spans("PNR", "DOCSDAHK1/////12MAR85/F//MILLER/JORDAN-1MILLER/JORDAN")[0]
@@ -46,13 +46,13 @@ class DetectionBridgeTests(unittest.TestCase):
         self.assertIn(("PHONE_NUMBER", "3125550142", "ctcmPhone"), phone)
 
     def test_built_in_email_is_found_in_free_text(self):
-        found = spans("Seats", "Contact emily.carter@example.com today")[0]
+        found = spans("PNR", "Contact emily.carter@example.com today")[0]
         self.assertIn("EMAIL_ADDRESS", [entity for entity, text, name in found])
 
     def test_a_format_applies_only_to_its_own_feed(self):
         self.assertEqual(spans("OnlyA", "ref DEMO-1234")[0], [("DEMO_CODE", "DEMO-1234", "demoCode")])
         self.assertEqual(spans("OnlyB", "ref DEMO-1234")[0], [])
-        self.assertNotIn("dateOfBirth", [n for e, t, n in spans("Seats", "DOCSDAHK1/////12MAR85/F//")[0]])
+        self.assertNotIn("dateOfBirth", [n for e, t, n in spans("OnlyB", "DOCSDAHK1/////12MAR85/F//")[0]])
 
     def test_a_pattern_timeout_raises_instead_of_skipping_the_pattern(self):
         # Presidio would skip a timed-out pattern and return no span; the bridge raises so .NET dead-letters (WR-016).
@@ -60,21 +60,21 @@ class DetectionBridgeTests(unittest.TestCase):
             "formats": [{"name": "slow", "entity": "DEMO_CODE", "score": 0.9, "patterns": [r"(A|AA)+$"], "context": []}]}))
         with self.assertRaises(TimeoutError):
             presidio_demo.analyze_strings("Slow", json.dumps(["A" * 40 + "!"]))
-        self.assertEqual(len(spans("ACI", "MILLER/JORDAN")[0]), 1, "the next call works normally")
+        self.assertEqual(len(spans("PNR", "MILLER/JORDAN")[0]), 1, "the next call works normally")
 
     def test_offsets_are_utf16_so_dotnet_masks_the_right_characters(self):
         text = "\U0001F600 CONTACT MILLER/JORDAN"
-        found = json.loads(presidio_demo.analyze_strings("PNR-Linking", json.dumps([text])))[0]
+        found = json.loads(presidio_demo.analyze_strings("PNR", json.dumps([text])))[0]
         name = [span for span in found if span[4] == "passengerName"][0]
         utf16 = text.encode("utf-16-le")
-        # The JSON name pattern allows spaces, so the match starts at CONTACT, right after the emoji (two UTF-16 units) and a space.
+        # The name pattern allows spaces, so the match starts at CONTACT, right after the emoji (two UTF-16 units) and a space.
         self.assertEqual(name[0], 3)
         self.assertEqual(utf16[name[0] * 2:name[1] * 2].decode("utf-16-le"), "CONTACT MILLER/JORDAN")
 
     def test_batch_keeps_one_result_per_string_and_rejects_bad_input(self):
-        self.assertEqual(len(spans("ACI", "20261005", "MILLER/JORDAN", "")), 3)
+        self.assertEqual(len(spans("PNR", "20261005", "MILLER/JORDAN", "")), 3)
         with self.assertRaises(ValueError):
-            presidio_demo.analyze_strings("ACI", json.dumps([1, 2]))
+            presidio_demo.analyze_strings("PNR", json.dumps([1, 2]))
         with self.assertRaises(ValueError):
             presidio_demo.analyze_strings("NoSuchFeed", "[]")
 
