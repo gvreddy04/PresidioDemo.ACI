@@ -91,7 +91,9 @@ public sealed class SolaceConnection(SolaceOptions options, MessagingOptions mes
             SSLValidateCertificate = options.ValidateCertificate,
             SSLValidateCertificateDate = options.ValidateCertificate,
             SSLValidateCertificateHost = options.ValidateCertificate,
-            SendBlocking = true
+            SendBlocking = true,
+            // Topic subscriptions get their own dispatch target (SolaceTopicSubscriber); other direct messages are dropped.
+            TopicDispatch = true
         };
         if (options.TrustStoreFolder is { } store)
         {

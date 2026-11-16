@@ -10,7 +10,7 @@ using PresidioDemo.Messaging.Solace.Publisher;
 namespace PresidioDemo.Messaging.Solace;
 
 /// <summary>
-/// Registers the Solace adapter's connection, listener and publisher behind the broker-neutral ports.
+/// Registers the Solace adapter's connection, listener, publisher and topic subscriber behind the broker-neutral ports.
 /// </summary>
 public static class SolaceMessaging
 {
@@ -27,7 +27,7 @@ public static class SolaceMessaging
     #region Methods
 
     /// <summary>
-    /// Validates the Solace section and registers the adapter as the messaging connection, consumer and publisher.
+    /// Validates the Solace section and registers the adapter as the messaging connection, consumer, publisher and subscriber.
     /// </summary>
     /// <param name="services">The host's service collection.</param>
     /// <param name="configuration">The environment-resolved configuration.</param>
@@ -44,6 +44,7 @@ public static class SolaceMessaging
         services.AddSingleton<IMessagingConnection>(provider => provider.GetRequiredService<SolaceConnection>());
         services.AddSingleton<IMessageConsumer>(provider => new SolaceMessageConsumer(provider.GetRequiredService<SolaceConnection>()));
         services.AddSingleton<IMessagePublisher>(provider => new SolaceMessagePublisher(provider.GetRequiredService<SolaceConnection>(), messaging));
+        services.AddSingleton<IMessageSubscriber>(provider => new SolaceTopicSubscriber(provider.GetRequiredService<SolaceConnection>()));
         return services;
     }
 

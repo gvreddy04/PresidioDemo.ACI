@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using PresidioDemo.Messaging.Abstractions;
 using PresidioDemo.Messaging.Models;
 
@@ -6,9 +7,9 @@ namespace PresidioDemo.Messaging.Testing;
 
 /// <summary>
 /// A test-only broker with durable-queue semantics: one in-flight message per reader, redelivery of
-/// uncompleted messages with a higher delivery count, topic-to-queue subscriptions and confirmed publishing.
+/// uncompleted messages with a higher delivery count, topic-to-queue subscriptions, live topic subscribers and confirmed publishing.
 /// </summary>
-public sealed class InMemoryMessageBroker : IMessagingConnection, IMessageConsumer, IMessagePublisher
+public sealed class InMemoryMessageBroker : IMessagingConnection, IMessageConsumer, IMessagePublisher, IMessageSubscriber
 {
 
     #region Fields and Constants
@@ -32,6 +33,11 @@ public sealed class InMemoryMessageBroker : IMessagingConnection, IMessageConsum
     /// The queues attracting each topic.
     /// </summary>
     private readonly Dictionary<string, List<string>> _subscriptions = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The live subscribers of each topic, each receiving a copy of every later publication.
+    /// </summary>
+    private readonly Dictionary<string, List<Channel<InboundMessage>>> _subscribers = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Completes whenever a queue changes, waking waiting readers.
@@ -96,6 +102,14 @@ public sealed class InMemoryMessageBroker : IMessagingConnection, IMessageConsum
             foreach (string queue in targets)
             {
                 Enqueue(queue, new(NextId(), message.Payload.ToArray(), message.CorrelationId, new(message.Headers)));
+            }
+            if (message.Destination.Kind == DestinationKind.Topic && _subscribers.TryGetValue(message.Destination.Name, out var live))
+            {
+                foreach (var subscriber in live)
+                {
+                    subscriber.Writer.TryWrite(new(message.Destination.Name, NextId(), message.Payload.ToArray(), message.CorrelationId,
+                        new Dictionary<string, string>(message.Headers, StringComparer.Ordinal), 1, _ => ValueTask.CompletedTask));
+                }
             }
             Pulse();
         }
@@ -205,6 +219,39 @@ public sealed class InMemoryMessageBroker : IMessagingConnection, IMessageConsum
                 _subscriptions[topic] = queues = [];
             }
             queues.Add(queue);
+        }
+    }
+
+    /// <summary>
+    /// Streams a copy of every message published to a topic from the first read until cancellation, as a live subscriber.
+    /// </summary>
+    /// <param name="topic">The topic name, matched exactly.</param>
+    /// <param name="cancellationToken">The token that stops receiving.</param>
+    /// <returns>The received messages in publish order; completing one does nothing.</returns>
+    public async IAsyncEnumerable<InboundMessage> SubscribeAsync(string topic, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var channel = Channel.CreateUnbounded<InboundMessage>(new UnboundedChannelOptions { SingleReader = true });
+        lock (_gate)
+        {
+            if (!_subscribers.TryGetValue(topic, out var live))
+            {
+                _subscribers[topic] = live = [];
+            }
+            live.Add(channel);
+        }
+        try
+        {
+            await foreach (var message in channel.Reader.ReadAllAsync(cancellationToken))
+            {
+                yield return message;
+            }
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _subscribers[topic].Remove(channel);
+            }
         }
     }
 

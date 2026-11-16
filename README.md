@@ -39,6 +39,7 @@ PresidioDemo.slnx
 │   ├── DetectionParityChecks/          parity gate, recognizer checks, detection-log run, throughput
 │   ├── fixtures/                       value-free parity baseline, approved exceptions, spike summary
 │   └── unit-tests/                     Python tests, driven through the harness
+├── tools/FeedOutputReader/             subscribes to the output topics and logs each message's decoded values
 ├── tools/FeedSampleSender/             sends sample files to a running worker's input queue
 ├── Dockerfile                          the worker image (Linux, embedded CPython, Presidio, spaCy model)
 └── deploy/
@@ -319,7 +320,29 @@ $env:SOLACE_PASSWORD = "<same value>"
 dotnet run --project tools/FeedSampleSender
 ```
 
-Protected messages are published to the `airline/pnr/protected` topic and rejected ones go to the `q.pnr.dlq` queue. A topic keeps nothing without a subscriber, so to inspect protected output locally, create a queue in the PubSub+ Manager (http://localhost:8080, user `admin`) with the subscription `airline/>` before sending. Ctrl+C stops the worker after the current messages; unacknowledged messages are redelivered on the next start. `docker compose -f deploy/docker-compose.yml down` removes the broker and its queues.
+Protected messages are published to the `airline/pnr/protected` topic and rejected ones go to the `q.pnr.dlq` queue. A topic keeps nothing without a subscriber, so start the output reader before sending. It subscribes to each route's output topic as `<ClientName>-reader`, decodes every message with its feed's codec, and writes the published (protected) value of each decoded string to a text file under the git-ignored `.test-runs/output-reader/`:
+
+```powershell
+$env:SOLACE_PASSWORD = "<same value>"
+dotnet run --project tools/FeedOutputReader                 # Ctrl+C stops; --count 2 stops after two messages
+```
+
+```text
+RECV PNR    PNR.txt                    12466 bytes  fields=89
+```
+
+```text
+=== MESSAGE 1 | 2026-11-16 19:10:45.188 | topic:airline/pnr/protected
+  message ID: app:6b2df030ff5ddb11243d118435560d45
+  file:       "PNR.txt"
+  headers:    presidio-feed="PNR"
+  feed PNR | format mq-export | 12466 bytes | fields=89 | offsets=payload
+  Decoded fields (published values)
+    slot 12 @0x01A4  "######/######"
+    ...
+```
+
+The reader removes nothing from any queue and sees only messages published while it runs; `--topic <topic>` replaces the route's topic (Solace wildcards such as `airline/pnr/>` are allowed) and `--output <file>` the log file. To keep protected output while no reader runs, create a queue in the PubSub+ Manager (http://localhost:8080, user `admin`) with the subscription `airline/>` before sending. Ctrl+C stops the worker after the current messages; unacknowledged messages are redelivered on the next start. `docker compose -f deploy/docker-compose.yml down` removes the broker and its queues.
 
 With the two PNR samples, expect 2 protected messages, no dead-lettered message, and an empty input queue. The local broker run has not been repeated on this branch; the harness gives the same result (see [Process files without a broker](#process-files-without-a-broker)).
 

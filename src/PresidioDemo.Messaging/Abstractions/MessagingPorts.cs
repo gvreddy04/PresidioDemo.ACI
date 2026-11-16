@@ -53,6 +53,27 @@ public interface IMessageConsumer
 }
 
 /// <summary>
+/// Receives a live copy of every message published to a topic while subscribed, as any other subscriber of that topic does;
+/// nothing is removed from a queue, and messages published while not subscribed are not received (QF-26111602).
+/// </summary>
+public interface IMessageSubscriber
+{
+
+    #region Methods
+
+    /// <summary>
+    /// Subscribes to a topic and streams the messages published to it until cancellation, then unsubscribes.
+    /// </summary>
+    /// <param name="topic">The topic name.</param>
+    /// <param name="cancellationToken">The token that stops receiving.</param>
+    /// <returns>The received messages in arrival order; completing one does nothing.</returns>
+    /// <exception cref="InvalidOperationException">The subscription could not be added.</exception>
+    IAsyncEnumerable<InboundMessage> SubscribeAsync(string topic, CancellationToken cancellationToken);
+
+    #endregion
+}
+
+/// <summary>
 /// Publishes durable messages and completes only after the broker confirms them.
 /// </summary>
 public interface IMessagePublisher

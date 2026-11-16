@@ -18,7 +18,7 @@ var adapters = new List<(string Name, Func<string[], AdapterUnderTest> Create)>
     ("InMemory", _ =>
     {
         var broker = new InMemoryMessageBroker();
-        return new(broker, broker, broker);
+        return new(broker, broker, broker, broker);
     })
 };
 if (Environment.GetEnvironmentVariable("SOLACE_CONTRACT_TESTS") == "1")
@@ -36,7 +36,7 @@ if (Environment.GetEnvironmentVariable("SOLACE_CONTRACT_TESTS") == "1")
             PasswordEnvironmentVariable = "SOLACE_PASSWORD", ClientName = "contract-" + Guid.NewGuid().ToString("N")[..8], ValidateCertificate = false, ProvisionQueues = true
         };
         var connection = new SolaceConnection(solace, messaging, LoggerFactory.Create(b => b.AddConsole()).CreateLogger<SolaceConnection>());
-        return new(connection, new SolaceMessageConsumer(connection), new SolaceMessagePublisher(connection, messaging));
+        return new(connection, new SolaceMessageConsumer(connection), new SolaceMessagePublisher(connection, messaging), new SolaceTopicSubscriber(connection));
     }));
 }
 else
@@ -72,6 +72,20 @@ foreach (var (name, create) in adapters)
             order.Add(Encoding.UTF8.GetString((await ReadOne(adapter.Consumer, queue, complete: true))!.Payload.Span));
         }
         Require(order.SequenceEqual(["a", "b", "c"]), name, "messages on one queue arrive in publish order");
+
+        // A topic subscriber gets a live copy of each later publication (QF-26111602).
+        string topic = "contract/sub/" + Guid.NewGuid().ToString("N")[..12];
+        await adapter.Publisher.PublishAsync(Topic(topic, "before"), CancellationToken.None);
+        using (var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+        {
+            await using var subscription = adapter.Subscriber.SubscribeAsync(topic, stop.Token).GetAsyncEnumerator(stop.Token);
+            // The subscription is added before the first read returns, so a publication after this call is received.
+            var arrived = subscription.MoveNextAsync();
+            await adapter.Publisher.PublishAsync(Topic(topic, "live", headers, "corr-2"), CancellationToken.None);
+            Require(await arrived && Encoding.UTF8.GetString(subscription.Current.Payload.Span) == "live" && subscription.Current.CorrelationId == "corr-2" &&
+                subscription.Current.Headers.GetValueOrDefault("sourceSystem") == "res-host",
+                name, "a topic subscriber receives a later publication with its payload, correlation ID and headers, and not an earlier one");
+        }
     }
     finally
     {
@@ -86,6 +100,9 @@ Console.WriteLine("All messaging contract checks passed.");
 
 static OutboundMessage Message(string queue, string text, Dictionary<string, string>? headers = null, string? correlation = null) =>
     new(new(queue, DestinationKind.Queue), Encoding.UTF8.GetBytes(text), Guid.NewGuid().ToString("N"), correlation, headers ?? []);
+
+static OutboundMessage Topic(string topic, string text, Dictionary<string, string>? headers = null, string? correlation = null) =>
+    new(new(topic, DestinationKind.Topic), Encoding.UTF8.GetBytes(text), Guid.NewGuid().ToString("N"), correlation, headers ?? []);
 
 // Opens a reader, takes one message, optionally acknowledges it, and closes the reader as a restart would.
 static async Task<InboundMessage?> ReadOne(IMessageConsumer consumer, string queue, bool complete, TimeSpan? wait = null)
@@ -119,7 +136,7 @@ static void Require(bool condition, string adapter, string label)
 
 #region Nested Types
 
-// The three ports an adapter provides.
-sealed record AdapterUnderTest(IMessagingConnection Connection, IMessageConsumer Consumer, IMessagePublisher Publisher);
+// The four ports an adapter provides.
+sealed record AdapterUnderTest(IMessagingConnection Connection, IMessageConsumer Consumer, IMessagePublisher Publisher, IMessageSubscriber Subscriber);
 
 #endregion

@@ -9,7 +9,7 @@ EditorConfig is the best fit for this project: the built-in formatter covers whi
 1. Open `PresidioDemo.slnx` and open a C# file.
 2. Select **Analyze > Code Cleanup > Configure Code Cleanup**, or use the arrow beside the editor's broom icon.
 3. Configure a profile with formatting, sorting/removing unnecessary usings, brace preferences, using-directive placement and namespace preferences, where those fixers are available in your Visual Studio version. Keep other transformations out of this profile unless you intend to apply them. The profile selection is a local Visual Studio setting; it is not stored in `.editorconfig`.
-4. Press **Ctrl+K, Ctrl+E** to clean the current file. To process a project or the whole solution, right-click it in Solution Explorer and select **Analyze and Code Cleanup > Run Code Cleanup**. `PresidioDemo.slnx` includes the four `src` projects, every C# check project under `tests` and `tools/FeedSampleSender`.
+4. Press **Ctrl+K, Ctrl+E** to clean the current file. To process a project or the whole solution, right-click it in Solution Explorer and select **Analyze and Code Cleanup > Run Code Cleanup**. `PresidioDemo.slnx` includes the four `src` projects, every C# check project under `tests`, `tools/FeedSampleSender` and `tools/FeedOutputReader`.
 
 For whitespace formatting only, use **Ctrl+K, Ctrl+D**. For cleanup on save, enable **Run Code Cleanup profile on save** under **Tools > Options > Text Editor > Code Cleanup**.
 
