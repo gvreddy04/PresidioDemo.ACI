@@ -87,8 +87,8 @@ internal static class DetectingProtectorChecks
         }
         var log = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events);
         var valued = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, before: fictionalBefore, after: fictionalAfter);
-        Check(Lines(log)[0] == "PNR " + Guid.Empty.ToString("N") + " DETECTION PUBLISHED strings=7 pii=3 non-pii=2 review=2 offsets=payload",
-            "the header names the feed, transaction, outcome, counts and offset base");
+        Check(Lines(log)[0] == "PNR " + Guid.Empty.ToString("N") + " DETECTION PUBLISHED file=- fields=7 pii=3 non-pii=2 review=2 offsets=payload",
+            "the header names the feed, transaction, outcome, file (- when none), field counts and offset base");
         Check(Lines(log).Skip(1).All(line => line.StartsWith(' ')) && Lines(valued).Skip(1).All(line => line.StartsWith(' ')),
             "every line after the header is indented, so a collector keeps the block as one entry");
         string pii = Section(log, "PII fields (changed)"), nonPii = Section(log, "Non-PII fields (unchanged)"), review = Section(log, "Review (a format or keep may be needed)");
@@ -109,7 +109,7 @@ internal static class DetectingProtectorChecks
         string quoted = encoded[(encoded.IndexOf('"', StringComparison.Ordinal))..encoded.IndexOf(" -> ", StringComparison.Ordinal)];
         Check(System.Text.Json.JsonSerializer.Deserialize<string>(quoted) == fictionalBefore[2], "an encoded value reads back exactly");
         var rejected = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, "Protection changed a PNR.", fictionalBefore, null);
-        Check(Lines(rejected)[0].EndsWith(" DETECTION DEAD-LETTERED strings=7 pii=3 non-pii=2 review=2 offsets=payload reason=\"Protection changed a PNR.\"", StringComparison.Ordinal)
+        Check(Lines(rejected)[0].EndsWith(" DETECTION DEAD-LETTERED file=- fields=7 pii=3 non-pii=2 review=2 offsets=payload reason=\"Protection changed a PNR.\"", StringComparison.Ordinal)
             && rejected.Contains("\"MILLER/JORDAN\" -> not published", StringComparison.Ordinal), "a dead-lettered block gives the reason and no after value");
         var keptOnly = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, [events[3]]);
         Check(Section(keptOnly, "PII fields (changed)") == "    (none)" && Section(keptOnly, "Review (a format or keep may be needed)") == "    (none)",

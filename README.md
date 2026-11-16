@@ -169,7 +169,7 @@ Patterns use syntax shared by .NET and the Python `regex` module and match case-
 
 ### Detection log
 
-`Presidio:DetectionLog` (off by default; for example `Presidio__DetectionLog=true` in the task definition, read at startup) writes one block per message to the worker's standard output (WR-018). The header names the feed, the transaction, the outcome and the counts. Below it, every decoded string is listed exactly once, in one of three groups:
+`Presidio:DetectionLog` (on in the `Local` environment, off in the base settings and so in `Dev`; for example `Presidio__DetectionLog=true` in the task definition, read at startup) writes one block per message to the worker's standard output (WR-018). The header names the feed, the transaction, the outcome, the source file (`file=`, the message's correlation ID, which the sample sender and the harness set to the file name; `-` when there is none), the number of fields identified (`fields=`), and how many are PII, non-PII and for review. Below it, every decoded string is listed exactly once, in one of three groups:
 
 - **PII fields (changed):** `masked`, `masked-inside`.
 - **Non-PII fields (unchanged):** `kept`, `anchor`.
@@ -178,7 +178,7 @@ Patterns use syntax shared by .NET and the Python `regex` module and match case-
 Without the values flag a block holds no value, only lengths and character shapes, so it may be switched on in any environment. A string is located by its slot and its byte offset in the decoded payload (`offsets=payload`); the binary feed has no field names. A made-up example:
 
 ```text
-PNR 3f9a… DETECTION PUBLISHED strings=4 pii=1 non-pii=2 review=1 offsets=payload
+PNR 3f9a… DETECTION PUBLISHED file=PNR_DEMO.txt fields=4 pii=1 non-pii=2 review=1 offsets=payload
   PII fields (changed)
     slot 12 @0x01A4  len=13 shape=AAAAAA/AAAAAA  format=passengerName entity=PERSON score=0.90 decision=masked
   Non-PII fields (unchanged)
@@ -192,17 +192,17 @@ An empty group is printed as `(none)`. A message dead-lettered after detection r
 
 **Adding a field from a review entry.** A `masked-by-default` entry is a string no format or keep recognised: if it is personal data, add a format for it to `pnr.xml`; if it is not, add a keep. A `missed-below-threshold` entry was published unchanged with a weak detection inside: add or tighten a format. Write a pattern for the value's shape, then follow [Changing a format](#changing-a-format).
 
-**Values in non-production (WR-020).** For testing in Local, Dev and QA, `Presidio:DetectionLogValues` (off by default, read at startup; for example `Presidio__DetectionLogValues=true`) adds the actual values: `"before" -> "after"` for a changed string, `"before"` for an unchanged one, and `-> not published` for a dead-lettered message. Values are JSON-encoded, so none of them can break a line:
+**Values in non-production (WR-020).** For testing in Local, Dev and QA, `Presidio:DetectionLogValues` (on by default, read at startup; `Presidio__DetectionLogValues=false` turns it off) adds the actual values: `"before" -> "after"` for a changed string, `"before"` for an unchanged one, and `-> not published` for a dead-lettered message. Values are JSON-encoded, so none of them can break a line:
 
 ```text
-PNR 3f9a… DETECTION PUBLISHED strings=4 pii=1 non-pii=2 review=1 offsets=payload
+PNR 3f9a… DETECTION PUBLISHED file=PNR_DEMO.txt fields=4 pii=1 non-pii=2 review=1 offsets=payload
   PII fields (changed)
     slot 12 @0x01A4  "MILLER/JORDAN" -> "######/######"  format=passengerName entity=PERSON score=0.90 decision=masked
   ...
 ```
 
-- It needs `Presidio:DetectionLog` on as well. With only the values flag set, the worker writes no detection blocks and logs one warning at startup.
-- It works only when the selected environment is `Local`, `Dev` or `QA` (an unset `DOTNET_ENVIRONMENT` falls back to `Local` and counts). In any other environment, such as `Prod`, the worker refuses to start.
+- It needs `Presidio:DetectionLog` on as well. With only the values flag set (as in `Dev` by default), the worker writes no detection blocks and logs one warning at startup.
+- It works only when the selected environment is `Local`, `Dev` or `QA` (an unset `DOTNET_ENVIRONMENT` falls back to `Local` and counts). In any other environment, such as `Prod`, the worker still starts: it switches the values flag off, prints one `WARNING` line, and writes value-free blocks only.
 - Blocks are written for published messages and for messages dead-lettered after detection ran.
 - Outside Local, the feed's log group must keep entries for at most 7 days and be readable only by the PII team role while the flag is on, and the flag is switched only through a reviewed task-definition deploy (PR-006, [deployment plan](docs/aws-deployment-plan.md)).
 - The test harness runs the same modes with `--detection-log on` and `--detection-log values`.

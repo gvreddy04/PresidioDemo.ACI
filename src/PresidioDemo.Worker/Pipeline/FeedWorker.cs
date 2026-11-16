@@ -155,7 +155,8 @@ public sealed class FeedWorker(FeedType feed, MessageRoute route, MessagingOptio
         if (detectionLog && result.DetectionEvents is { } events)
         {
             Console.Out.Write(DetectionLog.FormatBlock(feed, id, events, result.Published ? null : result.Reason,
-                detectionLogValues ? result.DetectionValues : null, detectionLogValues ? result.DetectionProtectedValues : null));
+                detectionLogValues ? result.DetectionValues : null, detectionLogValues ? result.DetectionProtectedValues : null,
+                input.CorrelationId));
         }
         if (onOutcome is not null)
         {

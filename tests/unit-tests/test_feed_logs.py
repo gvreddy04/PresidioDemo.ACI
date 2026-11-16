@@ -9,7 +9,7 @@ import unittest
 from pipeline_harness import PROJECT, run
 
 SPIKE = PROJECT / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
-HEADER = re.compile(r"^(\S+) ([0-9a-f]{32}) DETECTION (PUBLISHED|DEAD-LETTERED) strings=(\d+) pii=(\d+) non-pii=(\d+) review=(\d+)"
+HEADER = re.compile(r"^(\S+) ([0-9a-f]{32}) DETECTION (PUBLISHED|DEAD-LETTERED) file=(?:\S+) fields=(\d+) pii=(\d+) non-pii=(\d+) review=(\d+)"
                     r"( offsets=payload)?( reason=(\".*\"))?$")
 TAIL = re.compile(r"  format=(\S+) entity=(\S+) score=(\d\.\d\d) "
                   r"decision=(masked|kept|masked-inside|anchor|masked-by-default|missed-below-threshold)$")
@@ -229,6 +229,12 @@ class DetectionLogValuesTests(unittest.TestCase):
         # concurrent writes are kept apart; FeedPipelineChecks writes blocks from many threads at once for that (R-011).
         for block in blocks(self.values.console):
             self.assertEqual(int(block["header"].group(4)), len(block["entries"]))
+
+    def test_every_harness_block_names_its_source_file(self):
+        # QF-26111601: the header names the file (the correlation ID the harness and the sample sender set).
+        for block in blocks(self.values.console):
+            source = re.search(r" file=(\S+) ", block["lines"][0]).group(1)
+            self.assertRegex(source, r"\.(txt|bin)$", "a harness block names the input file")
 
     def test_largest_block_stays_far_below_the_log_event_limit(self):
         largest = max(len("\n".join(b["lines"]).encode("utf-8")) for b in blocks(self.values.console))

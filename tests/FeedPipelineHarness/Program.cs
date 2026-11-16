@@ -100,7 +100,8 @@ try
     {
         var (path, feed, content) = inputs[i];
         string format = Path.GetExtension(path).Equals(".txt", StringComparison.OrdinalIgnoreCase) ? FeedWorker.MqExportFormat : FeedWorker.RawFormat;
-        broker.Send(routes[feed].Input, content, new Dictionary<string, string> { [MessageHeaders.PayloadFormat] = format }, i.ToString());
+        // The correlation ID is the file name, as the sample sender sets it, so detection blocks show file=<name>.
+        broker.Send(routes[feed].Input, content, new Dictionary<string, string> { [MessageHeaders.PayloadFormat] = format }, Correlation(i));
     }
     var deadline = DateTime.UtcNow.AddMinutes(10);
     while (outcomes.Count < inputs.Count && DateTime.UtcNow < deadline)
@@ -124,7 +125,7 @@ for (int i = 0; i < inputs.Count; i++)
     string folder = FeedCatalog.Get(feed).FolderName;
     string name = Path.GetFileName(path);
     string sha = Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
-    if (!outcomes.TryGetValue(i.ToString(), out var outcome))
+    if (!outcomes.TryGetValue(Correlation(i), out var outcome))
     {
         items.Add(new { Source = path, Feed = folder, Sha256 = sha, Bytes = content.Length, Status = "Pending" });
         Console.WriteLine($"HARNESS {folder,-12} Pending   {name}");
@@ -133,7 +134,7 @@ for (int i = 0; i < inputs.Count; i++)
     // The before/after file is local and git-ignored, so its block carries values (WR-009).
     string? detection = outcome.Result.DetectionEvents is { } events
         ? DetectionLog.FormatBlock(feed, outcome.Result.Message.Delivery.MessageId, events, outcome.Result.Published ? null : outcome.Result.Reason,
-            outcome.Result.DetectionValues, outcome.Result.DetectionProtectedValues)
+            outcome.Result.DetectionValues, outcome.Result.DetectionProtectedValues, outcome.Input.CorrelationId)
         : null;
     if (outcome.Result.DetectionEvents is { } reviewed)
     {
@@ -163,6 +164,14 @@ return items.All(item => item.GetType().GetProperty("Status")!.GetValue(item) as
 #endregion
 
 #region Methods
+
+// The correlation ID of input i: its file name, prefixed with its index only when another input has the same name, so
+// each outcome stays keyed uniquely.
+string Correlation(int i)
+{
+    string name = Path.GetFileName(inputs[i].Path);
+    return inputs.Count(input => Path.GetFileName(input.Path).Equals(name, StringComparison.OrdinalIgnoreCase)) > 1 ? $"{i}-{name}" : name;
+}
 
 // Lists, per feed, every review-group field across the run (WR-021), by slot and payload offset. No string value is
 // written: only the decision, character shapes, a count and the file names.

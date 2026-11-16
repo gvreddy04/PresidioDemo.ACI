@@ -115,17 +115,21 @@ public static class DetectionLog
     /// <param name="rejectReason">The value-free dead-letter reason, or null for a published message.</param>
     /// <param name="before">The decoded values by slot, or null for a value-free block (WR-020).</param>
     /// <param name="after">The published values by slot, or null; ignored for a value-free block.</param>
+    /// <param name="source">The source file name, which senders put in the correlation ID, or null; written as
+    /// <c>file=</c> (QF-26111601), <c>-</c> when absent, JSON-encoded when it has characters outside letters, digits,
+    /// <c>.</c>, <c>_</c> and <c>-</c>.</param>
     /// <returns>The block, its lines separated by <see cref="Environment.NewLine"/> and ending with one.</returns>
     public static string FormatBlock(FeedType feed, Guid transaction, IReadOnlyList<DetectionEvent> events, string? rejectReason = null,
-        IReadOnlyList<string>? before = null, IReadOnlyList<string>? after = null)
+        IReadOnlyList<string>? before = null, IReadOnlyList<string>? after = null, string? source = null)
     {
         var groups = Enumerable.Range(0, events.Count).ToLookup(i => Group(events[i].Decision));
         var locations = events.Select(Location).ToArray();
         int width = locations.Select(location => location.Length).DefaultIfEmpty(0).Max();
 
         var block = new StringBuilder();
+        // The header names the file, then the fields identified and how they split into PII, non-PII and review.
         block.Append(CultureInfo.InvariantCulture,
-            $"{FeedCatalog.Get(feed).FolderName} {transaction:N} DETECTION {(rejectReason is null ? "PUBLISHED" : "DEAD-LETTERED")} strings={events.Count} pii={groups[DetectionGroup.Pii].Count()} non-pii={groups[DetectionGroup.NonPii].Count()} review={groups[DetectionGroup.Review].Count()}");
+            $"{FeedCatalog.Get(feed).FolderName} {transaction:N} DETECTION {(rejectReason is null ? "PUBLISHED" : "DEAD-LETTERED")} file={File(source)} fields={events.Count} pii={groups[DetectionGroup.Pii].Count()} non-pii={groups[DetectionGroup.NonPii].Count()} review={groups[DetectionGroup.Review].Count()}");
         block.Append(" offsets=payload");
         if (rejectReason is not null)
         {
@@ -177,6 +181,15 @@ public static class DetectionLog
     /// <param name="decision">The decision.</param>
     /// <returns>True for the PII decisions and masked-by-default.</returns>
     private static bool Changes(DetectionDecision decision) => Group(decision) == DetectionGroup.Pii || decision == DetectionDecision.MaskedByDefault;
+
+    /// <summary>
+    /// Returns the <c>file=</c> value of a block header: the source name as it is, <c>-</c> when absent, or JSON-encoded when it
+    /// has characters outside letters, digits, <c>.</c>, <c>_</c> and <c>-</c>, so it can never break the header line.
+    /// </summary>
+    /// <param name="source">The source file name, or null.</param>
+    /// <returns>The header value.</returns>
+    private static string File(string? source) => string.IsNullOrEmpty(source) ? "-"
+        : source.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-') ? source : Encode(source);
 
     /// <summary>
     /// Returns whether a character is a zero-width or bidirectional formatting character (U+200B to U+200F, U+202A to

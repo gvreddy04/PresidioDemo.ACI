@@ -112,30 +112,34 @@ var withVenv = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCol
 Require(PresidioOptions.Load(withVenv, runRoot).PythonEnvironment == venv, "Presidio:PythonEnvironment resolves against the application folder");
 var noVenv = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:PythonEnvironment", "missing")]).Build();
 Reject(() => PresidioOptions.Load(noVenv, runRoot), "a Python environment without pyvenv.cfg stops startup");
-Require(!PresidioOptions.Load(local, runRoot).DetectionLog, "the detection log is off by default (WR-018)");
+Require(PresidioOptions.Load(local, runRoot).DetectionLog && !PresidioOptions.Load(dev, runRoot).DetectionLog,
+    "the detection log is on in Local and off in the base settings, so Dev (QF-26111601)");
 var detectionLogOn = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DetectionLog", "true")]).Build();
 Require(PresidioOptions.Load(detectionLogOn, runRoot).DetectionLog, "Presidio:DetectionLog=true turns the detection log on");
 var detectionLogTypo = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DetectionLogs", "true")]).Build();
 Reject(() => PresidioOptions.Load(detectionLogTypo, runRoot), "a misspelled detection-log key stops startup");
-// WR-020: values in detection lines only with both flags on, and only in Local, Dev and QA.
+// WR-020: values in detection lines only with both flags on, and only in Local, Dev and QA. QF-26111601: the values flag
+// is on by default, and outside those environments it is switched off instead of stopping startup.
 var defaults = PresidioOptions.Load(local, runRoot);
-Require(!defaults.DetectionLogValues && !defaults.WritesValues, "detection log values are off by default (WR-020)");
-defaults.RequireValuesEnvironment("Prod");
-Require(true, "with the values flag off, any environment starts");
-var valuesOn = new ConfigurationBuilder().AddConfiguration(local)
-    .AddInMemoryCollection([new("Presidio:DetectionLog", "true"), new("Presidio:DetectionLogValues", "true")]).Build();
-var withValues = PresidioOptions.Load(valuesOn, runRoot);
-Require(withValues.WritesValues, "Presidio:DetectionLogValues=true with the detection log on writes values");
+Require(defaults.DetectionLogValues && defaults.WritesValues, "detection log values are on by default, so Local writes them (QF-26111601)");
+var devDefaults = PresidioOptions.Load(dev, runRoot);
+Require(devDefaults.DetectionLogValues && !devDefaults.WritesValues, "Dev has the values flag on but writes nothing while its detection log is off");
+var valuesOff = PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(local)
+    .AddInMemoryCollection([new("Presidio:DetectionLogValues", "false")]).Build(), runRoot);
+Require(!valuesOff.ApplyValuesEnvironment("Prod") && !valuesOff.WritesValues, "with the values flag off, any environment starts unchanged");
 foreach (string allowed in new[] { "Local", "Dev", "QA", "dev", localName })
 {
-    withValues.RequireValuesEnvironment(allowed);
+    var envOptions = PresidioOptions.Load(local, runRoot);
+    Require(!envOptions.ApplyValuesEnvironment(allowed) && envOptions.WritesValues, $"values stay on in the {allowed} environment");
 }
 Require(true, "values are allowed in Local, Dev and QA (any case), and when an unset DOTNET_ENVIRONMENT falls back to Local");
 foreach (string refused in new[] { "Prod", "Production", "Stage" })
 {
-    Reject(() => withValues.RequireValuesEnvironment(refused), $"values in the {refused} environment stop startup");
+    var envOptions = PresidioOptions.Load(local, runRoot);
+    Require(envOptions.ApplyValuesEnvironment(refused) && !envOptions.DetectionLogValues && !envOptions.WritesValues && envOptions.DetectionLog,
+        $"in the {refused} environment the values flag is switched off and the worker still starts with a value-free log");
 }
-var valuesOnly = PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(local)
+var valuesOnly = PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(dev)
     .AddInMemoryCollection([new("Presidio:DetectionLogValues", "true")]).Build(), runRoot);
 Require(valuesOnly.DetectionLogValues && !valuesOnly.WritesValues, "values without the detection log write nothing (the worker warns at startup)");
 foreach (string removed in new[] { "PolicyFile", "XdrLayoutFile", "ReferenceLayoutFile" })

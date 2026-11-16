@@ -20,15 +20,17 @@ public sealed class PresidioOptions
     #region Properties, Indexers
 
     /// <summary>
-    /// Gets or sets whether the value-free detection log is written (WR-018). Off by default; an environment settings file
-    /// or the <c>Presidio__DetectionLog</c> environment variable turns it on for one feed service. Read at startup.
+    /// Gets or sets whether the detection log is written (WR-018). Off in the base settings and on in the Local environment
+    /// (QF-26111601); an environment settings block or the <c>Presidio__DetectionLog</c> environment variable sets it for one
+    /// feed service. Read at startup.
     /// </summary>
     /// <value>True to write one value-free line per decoded string.</value>
     public bool DetectionLog { get; set; }
 
     /// <summary>
-    /// Gets or sets whether each detection log line also carries the actual decoded value (WR-020). Off by default; it
-    /// takes effect only with <see cref="DetectionLog"/> on, and only in <see cref="ValuesEnvironments"/>. Read at startup.
+    /// Gets or sets whether each detection log line also carries the actual decoded value (WR-020). On in the base settings
+    /// (QF-26111601); it takes effect only with <see cref="DetectionLog"/> on, and only in <see cref="ValuesEnvironments"/>:
+    /// elsewhere <see cref="ApplyValuesEnvironment"/> switches it off. Read at startup.
     /// </summary>
     /// <value>True to append the JSON-encoded decoded value to each detection log line.</value>
     public bool DetectionLogValues { get; set; }
@@ -90,17 +92,20 @@ public sealed class PresidioOptions
     }
 
     /// <summary>
-    /// Stops startup when <see cref="DetectionLogValues"/> is on in an environment outside <see cref="ValuesEnvironments"/>
-    /// (WR-020). The name is the selected environment, so an unset <c>DOTNET_ENVIRONMENT</c> that falls back to Local counts.
+    /// Switches <see cref="DetectionLogValues"/> off in an environment outside <see cref="ValuesEnvironments"/>, so values
+    /// never reach those logs, without stopping the worker (QF-26111601; previously startup stopped). The name is the
+    /// selected environment, so an unset <c>DOTNET_ENVIRONMENT</c> that falls back to Local counts.
     /// </summary>
     /// <param name="environment">The selected environment name.</param>
-    /// <exception cref="InvalidOperationException">The values flag is on outside Local, Dev and QA.</exception>
-    public void RequireValuesEnvironment(string environment)
+    /// <returns>True when the values flag was on and has been switched off; the caller logs a value-free warning.</returns>
+    public bool ApplyValuesEnvironment(string environment)
     {
-        if (DetectionLogValues && !ValuesEnvironments.Contains(environment, StringComparer.OrdinalIgnoreCase))
+        if (!DetectionLogValues || ValuesEnvironments.Contains(environment, StringComparer.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Presidio:DetectionLogValues is allowed only in the Local, Dev and QA environments.");
+            return false;
         }
+        DetectionLogValues = false;
+        return true;
     }
 
     #endregion
