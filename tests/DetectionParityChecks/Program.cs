@@ -21,7 +21,7 @@ while (!File.Exists(Path.Combine(root, "PresidioDemo.slnx")))
 }
 if (args is ["config-checks"])
 {
-    Console.WriteLine($"PASS {ConfigurationChecks.Run(root)} recognizer configuration checks");
+    Console.WriteLine($"PASS {ConfigurationChecks.Run(root) + RecognizerFileChecks.Run()} recognizer configuration checks");
     return 0;
 }
 if (args is ["bridge-json"])

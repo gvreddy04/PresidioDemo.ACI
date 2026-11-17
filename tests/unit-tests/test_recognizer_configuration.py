@@ -26,8 +26,8 @@ ADVERSARIAL = [
 
 
 def patterns():
-    """Yield (file, name, pattern) for every pattern, as it runs: formats are searched by Presidio, keeps are only ever
-    matched against the whole value (anchored), as the .NET loader compiles them."""
+    """Yield (file, name, pattern) for every pattern, as it runs: formats and custom recognizer patterns are searched by
+    Presidio; keeps and allow-list items are only ever matched against the whole value (anchored), as .NET compiles them."""
     for name in FILES:
         root = ET.parse(RECOGNIZERS / name).getroot()
         for element in root.iter("format"):
@@ -36,6 +36,13 @@ def patterns():
         for element in root.iter("keep"):
             for pattern in element.iter("pattern"):
                 yield name, element.get("name"), r"\A(?:" + pattern.text + r")\Z"
+        # Presidio-style files: custom recognizer patterns are searched; allow-list items match whole strings.
+        for element in root.iter("recognizer"):
+            for pattern in element.iter("pattern"):
+                yield name, element.get("name"), pattern.text
+        for element in root.iter("allow_list"):
+            for item in element.iter("item"):
+                yield name, "allow_list", r"\A(?:" + item.text + r")\Z"
 
 
 class RecognizerConfigurationTests(unittest.TestCase):
