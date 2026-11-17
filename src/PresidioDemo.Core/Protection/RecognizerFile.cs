@@ -317,13 +317,17 @@ public static class RecognizerFileReader
     }
 
     /// <summary>
-    /// Compiles a pattern for .NET: the regex must compile, and an allow-list item must match the whole string.
+    /// Compiles a pattern for .NET: the regex must compile on its own, and an allow-list item must match the whole string.
     /// </summary>
     private static Regex Compile(string pattern, string file, string name)
     {
+        const RegexOptions Options = RegexOptions.CultureInvariant | RegexOptions.IgnoreCase;
         try
         {
-            return new Regex("\\A(?:" + pattern + ")\\z", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, MatchTimeout);
+            // An unbalanced ")" such as "A)|(?:.*" is invalid alone but valid inside the wrapper, where it would escape the
+            // whole-string anchor and match every string, so the bare pattern is compiled first.
+            _ = new Regex(pattern, Options, MatchTimeout);
+            return new Regex("\\A(?:" + pattern + ")\\z", Options, MatchTimeout);
         }
         catch (ArgumentException)
         {

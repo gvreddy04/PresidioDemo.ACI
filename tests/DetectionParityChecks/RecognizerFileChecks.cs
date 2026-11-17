@@ -83,6 +83,9 @@ public static class RecognizerFileChecks
             Reject(scratch, Valid.Replace("0.6", "1.5"), "a threshold above 1", ref passed);
             Reject(scratch, Valid.Replace("ORD\\d+", "(unclosed"), "a pattern that does not compile", ref passed);
             Reject(scratch, Valid.Replace("\\d{4}", "(unclosed"), "an allow-list item that does not compile", ref passed);
+            // An unbalanced ")" is invalid alone but valid inside the whole-string wrapper, where it would match every string.
+            Reject(scratch, Valid.Replace("<item>FQT[RS]</item>", "<item>FQTR)|(?:.*</item>"), "an allow-list item that escapes its anchor", ref passed, "does not compile");
+            Reject(scratch, Valid.Replace("ORD\\d+", "ORD)|(?:.*"), "a pattern that escapes its anchor", ref passed, "does not compile");
             Reject(scratch, Valid.Replace("name=\"titles\"", "name=\"passengerName\""), "a duplicate recognizer name", ref passed);
             Reject(scratch, Valid.Replace("type=\"predefined\"", "type=\"builtin\""), "an unknown recognizer type", ref passed);
             Reject(scratch, Valid.Replace("enabled=\"false\" />", "enabled=\"no\" />"), "an enabled value other than true or false", ref passed);
