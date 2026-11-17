@@ -98,6 +98,7 @@ bool started = false;
 try
 {
     FeedTransactionLogChecks.Run();
+    FeedAnonymizerChecks.Run();
     await NoAnonymizationRoundTripChecks.RunAsync(projectRoot, Path.Combine(docsRoot, "round-trip-checks"));
     PythonHost.Start();
     started = true;
