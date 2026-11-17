@@ -140,65 +140,69 @@ The PNR feed is decoded generically; there is no schema or field list, so a temp
 
 `PnrDecoder` (an `XdrFeedDecoder`) reads the IBM MQ export or raw payload, and `XdrTextScanner` scans the big-endian XDR words for counted strings of four or more printable ASCII characters. Shorter spans stay raw words and are never changed, because words such as `00000001 31000000` cannot be told apart from a one-character string (WR-015). A counted string whose text is not printable ASCII but is mostly letters, digits or spaces (Latin-1, EBCDIC, or text with a control character) cannot be checked, so the message is dead-lettered; this includes lowercase and mixed-case EBCDIC. So is a length word followed by printable text that is longer than 65,535 bytes or runs past the end of the payload. Integers, framing and padding are never decoded or changed. Protected values are written back at the same width, and validation rejects any change outside the scanned strings.
 
-The feed's recognizer file is [src/PresidioDemo.Core/Configuration/recognizers/pnr.xml](src/PresidioDemo.Core/Configuration/recognizers/pnr.xml). For every decoded string, in this order:
+The feed's recognizer file is [src/PresidioDemo.Core/Configuration/recognizers/pnr.xml](src/PresidioDemo.Core/Configuration/recognizers/pnr.xml). It is a Presidio-style XML: a flat list under `<recognizers>` that mirrors Presidio's recognizer registry YAML, its `analyze` allow list and its anonymizers map, using Presidio's names (WR-014). Each decoded string is decided on its own:
 
-1. **PNR anchor** (WR-017): kept unchanged. The anchor names the PNR-shaped string next to a neighbouring format (in `pnr.xml`, the string just after the nine-digit creation time), never a fixed position. The loader also accepts an anchor for a PNR embedded in a longer string (the `pnr` group of a pattern inside a named keep) and an optional anchor; `pnr.xml` uses neither. A missing required anchor dead-letters the message. So does a malformed PNR: an optional anchor position must hold a PNR-shaped value or another declared value.
-2. **A declared format that matches the whole string**: masked by that format. It wins over a keep, so a keep never publishes a value the feed's own formats identify.
-3. **Keep**: published unchanged. With `scan="true"` (records such as DOCS, CTCE, CTCM and TKNE) the personal-data spans the formats find inside it are still masked.
-4. **A built-in or NER match of the whole string**: masked by that built-in.
-5. **Anything else** is masked across its full width, keeping literal `*` separators (WR-014).
+1. **Allow list.** A string that matches an `<allow_list>` item end to end (exact text, or a regex with `match="regex"`) is published unchanged without analysis. An item never releases a piece of a longer string: `1405` is kept by `^\d{4}$`, but the `1234` inside `RBY09NOV*APPR CC VI 1234 OK` is still masked.
+2. **Detection.** Every Presidio predefined recognizer runs (spaCy NER for `PERSON`, `LOCATION`, `NRP` and `DATE_TIME`; patterns for `EMAIL_ADDRESS`, `CREDIT_CARD`, `IP_ADDRESS` and the rest), unless the file switches it off by class name with `<recognizer name="…" type="predefined" enabled="false" />`. The file's `type="custom"` recognizers add PNR-specific patterns, context words and deny lists. Spans scoring below `default_score_threshold` are ignored.
+3. **Actions.** Each detected span gets its entity's `<anonymizer>`, else the `DEFAULT` one, else Presidio's default `replace` (`<ENTITY>`). The operators are Presidio's `mask`, `replace`, `redact`, `hash` and `keep`, with Presidio's parameter names (`masking_char`, `chars_to_mask`, `from_end`, `new_value`, `hash_type`, `salt`); `encrypt`, `custom` and `surrogate_ahds` stop startup. Overlapping spans of different entities are resolved by score, then length, then position.
+4. **Width.** Every result is fitted to the width of the text it replaces: padded with spaces or cut (WR-015). `Alex Sample` becomes `***********` with `mask`, `<PERSON>` and three spaces with `replace`, eleven spaces with `redact`, and the first eleven hex characters of its hash with `hash`; in a five-character value, `replace` writes `<PERS`.
+5. **Nothing detected.** A string in which nothing is detected is published unchanged and listed for review in the detection log. There is no PNR-specific rule: a PNR is published unchanged unless a recognizer detects it.
 
-Local Presidio runs once per message as a batch through Python.NET: the XML formats as pattern recognizers, the listed built-ins, and spaCy NER for `PERSON`. Python returns spans only; every decision is made in .NET. Every protection masks at the same width. A message is dead-lettered only for a structural failure: undecodable framing, binary text that is not printable ASCII, a missing or malformed PNR anchor, a recognizer pattern that times out (the bridge sets Presidio's limit to one second and treats a skipped pattern as a failure), or a rebuild that differs outside the protected strings (WR-016). A value that detection misses is published, and shows up in the detection log.
+Local Presidio runs once per message as a batch through Python.NET, and returns spans only; every decision is made in .NET. A message is dead-lettered only for a structural failure: undecodable framing, binary text that is not printable ASCII, a recognizer pattern that times out (the bridge sets Presidio's limit to one second and treats a skipped pattern as a failure), or a rebuild that differs outside the protected strings (WR-016). An invalid recognizer file stops startup with a message naming the file and the problem, such as a retired element (`<builtIn>`, `<keep>`, `<format>`, `<pnrAnchor>`, `defaultMaskCharacter`), an unknown attribute, a rejected operator or a regex that does not compile.
 
-A format, with fictional data. `DOCSDAHK1/////12MAR85/F//MILLER/JORDAN-1MILLER/JORDAN` publishes as `DOCSDAHK1/////*******/*//*************-1*************`:
+A custom recognizer and actions, with fictional data. `DOCSDAHK1/////12MAR85/F//MILLER/JORDAN-1MILLER/JORDAN` publishes as `DOCSDAHK1/////*******/*//*************-1*************`:
 
 ```xml
-<format name="dateOfBirth" entity="DATE_OF_BIRTH" score="0.9" maskCharacter="*">
-  <pattern>(?&lt;=/)\d{2}[A-Z]{3}\d{2}(?=/[MFUX]I?/)</pattern>
+<recognizer name="dateOfBirth" type="custom" supported_entity="DATE_OF_BIRTH">
+  <pattern name="DOCS birth date" score="0.9">(?&lt;=/)\d{2}[A-Z]{3}\d{2}(?=/[MFUX]I?/)</pattern>
   <context>DOCS</context>
-</format>
-<keep name="docsRecord" scan="true"><pattern>DOCS[A-Z0-9]{2}HK\d/.*</pattern></keep>
+</recognizer>
+<allow_list match="regex">
+  <item>^\d{4}$</item>
+</allow_list>
+<anonymizer entity="DATE_OF_BIRTH" type="mask" masking_char="*" />
+<anonymizer entity="DEFAULT" type="mask" masking_char="#" />
 ```
 
-Patterns use syntax shared by .NET and the Python `regex` module and match case-insensitively. Loyalty, sensitive-attribute and financial formats use `#` so literal `*` separators stay distinguishable; other masks use `*`.
+Patterns use syntax shared by .NET and the Python `regex` module and match case-insensitively. `<context>` and `<deny_list>` take space-separated words; a context word near a match raises its score. Loyalty, sensitive-attribute and financial entities mask with `#` so literal `*` separators stay distinguishable; the others use `*`.
 
-### Changing a format
+### Changing a recognizer or an action
 
-1. Edit `Configuration/recognizers/pnr.xml`. The loader rejects a bad pattern, a duplicate name, a missing anchor or an unknown element or attribute at startup. Each anchor, format and keep has a one-line `Example:` comment with fictional values (such as `MILLER/JORDAN` or `DA12345678`); add one for a new entry, never with real data.
-2. Check parity: `src/.venv/Scripts/python.exe tests/run_sample_verification.py`. Every value in [tests/fixtures/parity-baseline.json](tests/fixtures/parity-baseline.json) must stay protected or be listed in [parity-exceptions.json](tests/fixtures/parity-exceptions.json), and every PNR must stay unchanged (WR-019). A string the baseline protects nothing inside may be masked only if it is listed in [false-positives.json](tests/fixtures/false-positives.json); any other masked string fails the check. All three files are value-free: sample, location, length, and an entity or a reason. The baseline was frozen from the field policies this design replaced and cannot be regenerated. Every baseline entity type must keep a format or built-in in `pnr.xml` (`DetectionParityChecks -- config-checks`).
+1. Edit `Configuration/recognizers/pnr.xml`: add or change a `<recognizer>`, an `<allow_list>` item or an `<anonymizer>`. Each custom recognizer has a one-line `Example:` comment with fictional values (such as `MILLER/JORDAN` or `DA12345678`); add one for a new entry, never with real data.
+2. Check parity: `src/.venv/Scripts/python.exe tests/run_sample_verification.py`. Every value in [tests/fixtures/parity-baseline.json](tests/fixtures/parity-baseline.json) must stay protected or be listed with a reason in [parity-exceptions.json](tests/fixtures/parity-exceptions.json) (WR-019); a released value fails this developer check, never the worker. Masking something the baseline does not list never fails it. Both files are value-free: sample, location, length, and an entity or a reason. The baseline was frozen from the field policies an earlier design used and cannot be regenerated. Every baseline entity type must have a custom recognizer or a Presidio predefined entity (`DetectionParityChecks -- config-checks`).
 3. Open a pull request. The recognizer file ships only inside the image built from it (PR-005), so a change reaches an environment by deploying that image. While decoded-text detection is a POC, that image is deployed to Dev only ([deployment plan](docs/aws-deployment-plan.md)).
 
 ### Detection log
 
 `Presidio:DetectionLog` (on in the `Local` environment, off in the base settings and so in `Dev`; for example `Presidio__DetectionLog=true` in the task definition, read at startup) writes one block per message to the worker's standard output (WR-018). The header names the feed, the transaction, the outcome, the source file (`file=`, the message's correlation ID, which the sample sender and the harness set to the file name; `-` when there is none), the number of fields identified (`fields=`), and how many are PII, non-PII and for review. Below it, every decoded string is listed exactly once, in one of three groups:
 
-- **PII fields (changed):** `masked`, `masked-inside`.
-- **Non-PII fields (unchanged):** `kept`, `anchor`.
-- **Review (a format or keep may be needed):** `masked-by-default` (changed: no format or keep matched, so the whole string was masked) and `missed-below-threshold` (unchanged: a keep matched, with a weak detection inside).
+- **PII fields (changed):** an action changed the string (`decision=changed`).
+- **Non-PII fields (unchanged):** an allow-list item kept it (`allowed`), the `keep` operator left it (`kept`), or it is empty.
+- **Review (check these; each line has a fix):** the string was left unprotected (`nothing-detected`, or `below-threshold` with its score against the threshold), changed by an entity with no anonymizer of its own (`no-action`), changed by a spaCy guess (`spacy-guess`), or affected by an overlap or a cut result (`overlap`, `cut`). Each review line names its reasons and a fix, such as `fix="add a recognizer if this is personal data, or an allow-list item if it is not"`.
 
 Without the values flag a block holds no value, only lengths and character shapes, so it may be switched on in any environment. A string is located by its slot and its byte offset in the decoded payload (`offsets=payload`); the binary feed has no field names. A made-up example:
 
 ```text
-PNR 3f9a… DETECTION PUBLISHED file=PNR_DEMO.txt fields=4 pii=1 non-pii=2 review=1 offsets=payload
+PNR 3f9a… DETECTION PUBLISHED file=PNR_DEMO.txt fields=4 pii=1 non-pii=1 review=2 offsets=payload
   PII fields (changed)
-    slot 12 @0x01A4  len=13 shape=AAAAAA/AAAAAA  format=passengerName entity=PERSON score=0.90 decision=masked
+    slot 12 @0x01A4  len=13 shape=AAAAAA/AAAAAA  recognizer=passengerName entity=PERSON score=0.90 operator=mask decision=changed
   Non-PII fields (unchanged)
-    slot 2 @0x0018   len=6 shape=AAA999  format=anchor entity=PNR score=1.00 decision=anchor
-    slot 7 @0x00E0   len=6 shape=AA9999  format=flightNumber entity=- score=0.00 decision=kept
-  Review (a format or keep may be needed)
-    slot 18 @0x0288  len=10 shape=AA99999999  unchanged  format=loyalty entity=LOYALTY score=0.30 decision=missed-below-threshold
+    slot 7 @0x00E0   len=4 shape=9999  recognizer=allow_list entity=- score=0.00 decision=allowed
+  Review (check these; each line has a fix)
+    slot 2 @0x0018   len=6 shape=AAA999  unchanged  recognizer=none entity=- score=0.00 decision=nothing-detected reason=nothing-detected fix="add a recognizer if this is personal data, or an allow-list item if it is not"
+    slot 18 @0x0288  len=8 shape=A9999999  unchanged  recognizer=UsLicenseRecognizer entity=US_DRIVER_LICENSE score=0.30<0.50 decision=below-threshold reason=below-threshold fix="add context words or raise the pattern score if this is personal data"
 ```
 
 An empty group is printed as `(none)`. A message dead-lettered after detection ran has `DEAD-LETTERED` and its reason in the header; a message rejected before detection (for example, malformed framing) has no block. Every line after the header is indented, so a log collector can keep the block as one entry (see the CloudWatch setting in the [deployment plan](docs/aws-deployment-plan.md)).
 
-**Adding a field from a review entry.** A `masked-by-default` entry is a string no format or keep recognised: if it is personal data, add a format for it to `pnr.xml`; if it is not, add a keep. A `missed-below-threshold` entry was published unchanged with a weak detection inside: add or tighten a format. Write a pattern for the value's shape, then follow [Changing a format](#changing-a-format).
+**Acting on a review entry.** Follow its fix: for personal data that nothing detected, add a custom recognizer for the value's shape; for a value that is not personal data but a spaCy guess changed, add an allow-list item; for an entity without its own action, add an `<anonymizer>`. Then follow [Changing a recognizer or an action](#changing-a-recognizer-or-an-action).
 
 **Values in non-production (WR-020).** For testing in Local, Dev and QA, `Presidio:DetectionLogValues` (on by default, read at startup; `Presidio__DetectionLogValues=false` turns it off) adds the actual values: `"before" -> "after"` for a changed string, `"before"` for an unchanged one, and `-> not published` for a dead-lettered message. Values are JSON-encoded, so none of them can break a line:
 
 ```text
-PNR 3f9a… DETECTION PUBLISHED file=PNR_DEMO.txt fields=4 pii=1 non-pii=2 review=1 offsets=payload
+PNR 3f9a… DETECTION PUBLISHED file=PNR_DEMO.txt fields=4 pii=1 non-pii=1 review=2 offsets=payload
   PII fields (changed)
-    slot 12 @0x01A4  "MILLER/JORDAN" -> "######/######"  format=passengerName entity=PERSON score=0.90 decision=masked
+    slot 12 @0x01A4  "MILLER/JORDAN" -> "*************"  recognizer=passengerName entity=PERSON score=0.90 operator=mask decision=changed
   ...
 ```
 
@@ -208,19 +212,18 @@ PNR 3f9a… DETECTION PUBLISHED file=PNR_DEMO.txt fields=4 pii=1 non-pii=2 revie
 - Outside Local, while both `Presidio:DetectionLog` and `Presidio:DetectionLogValues` are on, the deployment's log group must keep entries for at most 7 days and be readable only by the PII team role. Either flag is switched only through a reviewed task-definition deploy. Because the values flag is on by default, switching the detection log on in `Dev` or `QA` is what starts writing values (PR-006, [deployment plan](docs/aws-deployment-plan.md)).
 - The test harness runs the same modes with `--detection-log on` and `--detection-log values`.
 
-**Harness files.** Each before/after file in `logs/PNR/` holds the block with values right after the payload hex dump, so an offset can be looked up there. Each run also writes `detection-summary.txt` beside `report.json` (WR-021): every review-group field across the run, by slot and payload offset, with its decision, character shapes, a count and the file names. It holds no string value.
+**Harness files.** Each before/after file in `logs/PNR/` holds the block with values right after the payload hex dump, so an offset can be looked up there. Each run also writes `detection-summary.txt` beside `report.json` (WR-021): every review-group field across the run, by slot and payload offset, with its review reasons, character shapes, a count and the file names. It holds no string value.
 
 ### Results on the supplied samples
 
-Both PNR samples run through the real worker and local Presidio, and both are published. Of the 104 values the former field policies protected in them, 97 are protected and 7 are approved exceptions, all binary strings of one to three characters (WR-015). Both PNR occurrences stay unchanged. The value-free spike summary is in [tests/fixtures/spike-summary.json](tests/fixtures/spike-summary.json).
-
-Compared byte for byte with the output of the former field policies, neither sample is identical. They differ only in the approved exceptions, the 7 listed false positives (PNR remarks, fare remarks and six-digit numbers, now masked), and the mask character of standalone PNR names and identifiers, which the default mask writes as `#` where the former policies wrote `*`.
+Both PNR samples run through the real worker and local Presidio, and both are published. Of the 104 values the former field policies protected in them, 48 are protected and 56 are approved exceptions in [parity-exceptions.json](tests/fixtures/parity-exceptions.json): 7 binary strings of one to three characters (WR-015), and 49 values the Presidio-style rules no longer protect, accepted with one reason per category (18 free-text remarks with nothing detected, 12 remarks only partly masked, 7 six-character references, 5 short attribute codes, 4 standalone names and 3 phone numbers). The earlier field policies masked those by their position, which detection has no equivalent for. The value-free spike summary is in [tests/fixtures/spike-summary.json](tests/fixtures/spike-summary.json). In the samples, `PNR.txt` has 22 changed strings and 49 for review, and `PNR_02.txt` 2 and 19.
 
 ### Known limits
 
+- A string in which nothing is detected is published unchanged (fail open, WR-014). Presidio's documentation notes that automated detection is not guaranteed to find all sensitive information; the detection log lists every such string under Review, and `detection-summary.txt` collects them, so a recognizer can be added.
+- spaCy NER guesses: it can detect an operational value (a PNR such as `JQWX4H` as `PERSON`, `JORDAN` in a seat remark as `LOCATION`, `1405` as `DATE_TIME`) and change it. Such lines are listed under Review as `spacy-guess`; an allow-list item keeps a value that must stay unchanged.
 - Binary strings of one to three characters are published unchanged (WR-015), for example three-digit phone area codes.
-- A value that matches a keep is published even if it is personal data with the same shape; for example, a standalone date of birth written like `12MAR85` matches the `date` keep. Binary strings carry no labels, so a keep cannot tell the two apart.
-- A value that detection misses is published (WR-016); the detection log lists it under Review (`masked-by-default` or `missed-below-threshold`), and `detection-summary.txt` collects these, so a format can be added.
+- A result longer than the text it replaces is cut (`<PERS` for a five-character name with `replace`); `mask` never is.
 - Binary text that contains NUL bytes, such as UTF-16, is not recognised as text and is published unchanged. Producers send ASCII; the supplied exports use CCSID 437.
 - A Presidio regex timeout is detected through Presidio's "timed out" warning. Recheck `test_presidio_rules` when Presidio is upgraded.
 
@@ -421,10 +424,10 @@ These logs contain original personal data and are written only under `.test-runs
 | --- | --- | --- |
 | `dotnet run --project tests/WorkerChecks` | Environment selection, settings validation (including a route for a removed feed), ack-after-publish, outage retry, redelivery, max deliveries, dead-lettering, header filtering | nothing |
 | `dotnet run --project tests/Messaging.ContractTests` | The broker contract, on the in-memory broker; also on Solace when `SOLACE_CONTRACT_TESTS=1` and the local broker runs | nothing (Solace: local broker) |
-| `dotnet run --project tests/FeedPipelineChecks` | Detection with real Presidio on both samples, PNR anchors, fail-closed cases, parity regression, scheduling and dead-lettering through `FeedWorker` | Python venv |
+| `dotnet run --project tests/FeedPipelineChecks` | Detection with real Presidio on both samples, the operators and width fitting, per-string decisions and switches, fail-closed cases, parity regression, scheduling and dead-lettering through `FeedWorker` | Python venv |
 | `dotnet run --project tests/FeedRoundTripChecks` | Byte-exact round trips without anonymization | nothing |
 | `dotnet run --project tests/GenericCodecChecks` | The generic XDR scanner and codec on both samples | nothing |
-| `dotnet run --project tests/DetectionParityChecks -- config-checks` / `-- spike` | Recognizer file validation; parity, PNRs, rebuilds, false positives and throughput against the frozen baseline | nothing / Python venv |
+| `dotnet run --project tests/DetectionParityChecks -- config-checks` / `-- spike` | Recognizer file validation; parity of the protected values, rebuilds and throughput against the frozen baseline | nothing / Python venv |
 | `src/.venv/Scripts/python.exe -m unittest discover -s tests/unit-tests -p test_*.py` | The PNR samples through the harness against the baseline, template changes, recognizer patterns, the detection bridge, the value-free detection log and the project layout | built solution, Python venv |
 | `src/.venv/Scripts/python.exe tests/run_sample_verification.py` | Both samples end to end | built solution, Python venv |
 
