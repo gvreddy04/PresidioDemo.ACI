@@ -6,8 +6,9 @@ using PresidioDemo.Core.Pipeline;
 using PresidioDemo.Core.Protection;
 
 /// <summary>
-/// Checks the decoded-text protector (T-007): PNR anchors fail closed (V-06), detection failures dead-letter,
-/// unmatched strings are masked, and every production sample rebuilds and validates.
+/// Checks the decoded-text protector (WR-014, WR-015): each decoded string is decided on its own, detected spans get their
+/// entity's action fitted to width, a string in which nothing is detected is published unchanged and listed for review,
+/// detection failures dead-letter, and every production sample rebuilds and validates.
 /// </summary>
 internal static class DetectingProtectorChecks
 {
@@ -22,12 +23,12 @@ internal static class DetectingProtectorChecks
     public static async Task RunAsync(string projectRoot)
     {
         string recognizers = Path.Combine(projectRoot, "src", "PresidioDemo.Core", "Configuration", "recognizers");
-        var sets = RecognizerConfiguration.Load(recognizers);
+        var files = RecognizerFileReader.ReadAll(recognizers);
         string samples = Path.Combine(projectRoot, "docs", "sample-docs");
-        var protector = new DetectingFeedProtector(sets);
+        var protector = new DetectingFeedProtector(files);
 
         // Detection failure: the bridge has no registry for an unconfigured feed name, so the call fails and dead-letters.
-        var unconfigured = new DetectingFeedProtector(new Dictionary<FeedType, FeedRecognizerSet> { [FeedType.PNR] = sets[FeedType.PNR] });
+        var unconfigured = new DetectingFeedProtector(new Dictionary<FeedType, RecognizerFile> { [FeedType.PNR] = files[FeedType.PNR] });
         await RejectAsync(() => unconfigured.ProtectAsync(FeedType.PNR, Parse(Path.Combine(samples, "PNR", "PNR.txt")), CancellationToken.None),
             "Local Presidio detection failed", "a Presidio failure before configuration dead-letters");
         protector.Configure();
@@ -46,11 +47,10 @@ internal static class DetectingProtectorChecks
             var outcome = await protector.ProtectAsync(feed, parsed, CancellationToken.None);
             byte[] output = codec.Serialize(parsed, outcome.Values);
             codec.Validate(parsed, output);
-            var anchors = outcome.Events.Where(e => e.Decision == DetectionDecision.Anchor).ToArray();
-            Check(anchors.Length > 0, Path.GetFileName(path) + ": a PNR anchor was found");
+            Check(parsed.Fields.All(f => outcome.Values[f.Id].Length == f.Value.Length), Path.GetFileName(path) + ": every protected string keeps its width");
             var decoded = parsed.Fields
                 .Select(f => f.Value).Where(v => v.Any(char.IsAsciiLetterOrDigit) && DetectingFeedProtector.Shape(v) != v).ToHashSet(StringComparer.Ordinal);
-            Check(outcome.Events.All(e => !decoded.Contains(e.Shape) && !decoded.Contains(e.Format) && !decoded.Contains(e.Entity)),
+            Check(outcome.Events.All(e => !decoded.Contains(e.Shape) && !decoded.Contains(e.Recognizer) && !decoded.Contains(e.Entity)),
                 Path.GetFileName(path) + ": no detection event field carries a decoded value");
             // WR-020: the decoded values travel beside the events, one per slot, for the values flag only.
             var candidateValues = parsed.Fields.Select(f => f.Value);
@@ -62,21 +62,21 @@ internal static class DetectingProtectorChecks
                 Encoding.ASCII.GetString(payload.AsSpan(at, pair.Second.Value.Length)) == pair.Second.Value), Path.GetFileName(path) + ": each binary event's offset leads to its value");
             published++;
         }
-        Console.WriteLine($"PASS {published} production samples protected, rebuilt and validated with the recognizer sets");
+        Console.WriteLine($"PASS {published} production samples protected, rebuilt and validated with the recognizer files");
 
-        // WR-018, WR-020: one block per message; every string in exactly one group; values only when passed, JSON-encoded.
+        // WR-018, WR-020: one block per message; every string in exactly one group; review lines carry a reason and a fix.
         DetectionEvent[] events =
         [
-            new(0, 13, "AAAAAA/AAAAAA", "passengerName", "PERSON", 0.9, DetectionDecision.Masked, 0x01A4),
-            new(1, 6, "AAA999", "anchor", "PNR", 1, DetectionDecision.Anchor, 0x0018),
-            new(2, 22, "AAAA AAA", "none", "", 0, DetectionDecision.MaskedByDefault, 0x0200),
-            new(3, 6, "AA9999", "flightNumber", "", 0, DetectionDecision.Kept, 0x00E0),
-            new(4, 10, "AA99999999", "loyalty", "LOYALTY", 0.3, DetectionDecision.MissedBelowThreshold, 0x0288),
-            new(5, 7, "99AAA99", "dob", "DATE_OF_BIRTH", 1, DetectionDecision.Masked, 0x02A0),
-            new(6, 12, "AAAA AAAAAAA", "remark", "PERSON", 0.85, DetectionDecision.MaskedInside, 0x02C0),
+            new(0, 13, "AAAAAA/AAAAAA", "passengerName", "PERSON", 0.9, DetectionDecision.Changed, 0x01A4, "mask"),
+            new(1, 6, "AAA999", "none", "", 0, DetectionDecision.NothingDetected, 0x0018, Reasons: ReviewReason.NothingDetected, Threshold: 0.5),
+            new(2, 22, "AAAA AAA", DetectingFeedProtector.SpacyRecognizer, "LOCATION", 0.85, DetectionDecision.Changed, 0x0200, "mask", ReviewReason.SpacyGuess, 0.5),
+            new(3, 6, "AA9999", "allow_list", "", 0, DetectionDecision.Allowed, 0x00E0),
+            new(4, 10, "AA99999999", "UsLicenseRecognizer", "US_DRIVER_LICENSE", 0.3, DetectionDecision.BelowThreshold, 0x0288, Reasons: ReviewReason.BelowThreshold, Threshold: 0.5),
+            new(5, 7, "99AAA99", "dateOfBirth", "DATE_OF_BIRTH", 0.9, DetectionDecision.Changed, 0x02A0, "mask"),
+            new(6, 12, "AAAA AAAAAAA", "EmailRecognizer", "EMAIL_ADDRESS", 1, DetectionDecision.Changed, 0x02C0, "replace", ReviewReason.NoAction | ReviewReason.Cut, 0.5),
         ];
         string[] fictionalBefore = ["MILLER/JORDAN", "ABC123", "LINE ONE\nSAY \"HI\" \\ X", "XY1234", "XY99887766", "14MAR85", "CALL O'NEIL"];
-        string[] fictionalAfter = ["######/######", "ABC123", "######################", "XY1234", "XY99887766", "*******", "CALL ######"];
+        string[] fictionalAfter = ["######/######", "ABC123", "######################", "XY1234", "XY99887766", "*******", "CALL <EMAIL"];
         string[] Lines(string block) => block.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         string Section(string block, string heading)
         {
@@ -85,34 +85,42 @@ internal static class DetectingProtectorChecks
             int end = Array.FindIndex(lines, start + 1, line => !line.StartsWith("    ", StringComparison.Ordinal));
             return string.Join("\n", lines[(start + 1)..(end < 0 ? lines.Length : end)]);
         }
+        const string ReviewHeading = "Review (check these; each line has a fix)";
         var log = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events);
         var valued = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, before: fictionalBefore, after: fictionalAfter);
-        Check(Lines(log)[0] == "PNR " + Guid.Empty.ToString("N") + " DETECTION PUBLISHED file=- fields=7 pii=3 non-pii=2 review=2 offsets=payload",
+        Check(Lines(log)[0] == "PNR " + Guid.Empty.ToString("N") + " DETECTION PUBLISHED file=- fields=7 pii=2 non-pii=1 review=4 offsets=payload",
             "the header names the feed, transaction, outcome, file (- when none), field counts and offset base");
         Check(Lines(log).Skip(1).All(line => line.StartsWith(' ')) && Lines(valued).Skip(1).All(line => line.StartsWith(' ')),
             "every line after the header is indented, so a collector keeps the block as one entry");
-        string pii = Section(log, "PII fields (changed)"), nonPii = Section(log, "Non-PII fields (unchanged)"), review = Section(log, "Review (a format or keep may be needed)");
-        Check(new[] { "@0x01A4", "@0x02A0", "@0x02C0" }.All(pii.Contains) && new[] { "@0x0018", "@0x00E0" }.All(nonPii.Contains)
-            && new[] { "@0x0200", "@0x0288" }.All(review.Contains), "each decision is listed in its group, located by slot and offset");
+        string pii = Section(log, "PII fields (changed)"), nonPii = Section(log, "Non-PII fields (unchanged)"), review = Section(log, ReviewHeading);
+        Check(new[] { "@0x01A4", "@0x02A0" }.All(pii.Contains) && nonPii.Contains("@0x00E0", StringComparison.Ordinal)
+            && new[] { "@0x0018", "@0x0200", "@0x0288", "@0x02C0" }.All(review.Contains), "each string is listed in its group, located by slot and offset");
         Check(Lines(log).Count(line => line.Contains(" @0x", StringComparison.Ordinal)) == events.Length, "each string appears exactly once");
-        Check(review.Contains("masked-by-default", StringComparison.Ordinal) && review.Split('\n').Single(line => line.Contains("@0x0200", StringComparison.Ordinal)).Contains("  changed  ", StringComparison.Ordinal)
-            && review.Split('\n').Single(line => line.Contains("@0x0288", StringComparison.Ordinal)).Contains("  unchanged  ", StringComparison.Ordinal),
-            "a review entry says whether the string changed");
+        string ReviewLine(string at) => review.Split('\n').Single(line => line.Contains(at, StringComparison.Ordinal));
+        Check(ReviewLine("@0x0018").Contains("  unchanged  ", StringComparison.Ordinal)
+            && ReviewLine("@0x0018").Contains("reason=nothing-detected fix=\"add a recognizer if this is personal data, or an allow-list item if it is not\"", StringComparison.Ordinal),
+            "a nothing-detected string is listed unchanged with its fix");
+        Check(ReviewLine("@0x0288").Contains("score=0.30<0.50", StringComparison.Ordinal) && ReviewLine("@0x0288").Contains("reason=below-threshold", StringComparison.Ordinal),
+            "a below-threshold string compares its score with the threshold");
+        Check(ReviewLine("@0x0200").Contains("  changed  ", StringComparison.Ordinal) && ReviewLine("@0x0200").Contains("operator=mask decision=changed reason=spacy-guess", StringComparison.Ordinal),
+            "a spaCy guess is listed for review although it changed the string");
+        Check(ReviewLine("@0x02C0").Contains("reason=no-action+cut fix=\"add an <anonymizer> for EMAIL_ADDRESS; use mask for this entity, or a shorter new_value\"", StringComparison.Ordinal),
+            "several reasons are listed with one fix each");
         Check(fictionalBefore.All(value => !log.Contains(value, StringComparison.Ordinal)) && fictionalAfter.Where(value => !value.All(c => c == '#')).All(value => !log.Contains(value, StringComparison.Ordinal))
             && !log.Contains("->", StringComparison.Ordinal) && log.Contains("len=13 shape=AAAAAA/AAAAAA", StringComparison.Ordinal),
             "a value-free block carries lengths and shapes, never a value");
         Check(Lines(valued).Length == Lines(log).Length, "an encoded value never breaks a line");
-        Check(valued.Contains("\"MILLER/JORDAN\" -> \"######/######\"", StringComparison.Ordinal) && valued.Contains("\"CALL O'NEIL\" -> \"CALL ######\"", StringComparison.Ordinal)
-            && Section(valued, "Non-PII fields (unchanged)").Contains("\"ABC123\"  format=anchor", StringComparison.Ordinal),
+        Check(valued.Contains("\"MILLER/JORDAN\" -> \"######/######\"", StringComparison.Ordinal) && valued.Contains("\"CALL O'NEIL\" -> \"CALL <EMAIL\"", StringComparison.Ordinal)
+            && Section(valued, "Non-PII fields (unchanged)").Contains("\"XY1234\"  recognizer=allow_list", StringComparison.Ordinal),
             "a changed string shows before -> after; an unchanged string shows its value once");
         string encoded = Lines(valued).Single(line => line.Contains("@0x0200", StringComparison.Ordinal));
         string quoted = encoded[(encoded.IndexOf('"', StringComparison.Ordinal))..encoded.IndexOf(" -> ", StringComparison.Ordinal)];
         Check(System.Text.Json.JsonSerializer.Deserialize<string>(quoted) == fictionalBefore[2], "an encoded value reads back exactly");
-        var rejected = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, "Protection changed a PNR.", fictionalBefore, null);
-        Check(Lines(rejected)[0].EndsWith(" DETECTION DEAD-LETTERED file=- fields=7 pii=3 non-pii=2 review=2 offsets=payload reason=\"Protection changed a PNR.\"", StringComparison.Ordinal)
+        var rejected = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, "Fixture rejection.", fictionalBefore, null);
+        Check(Lines(rejected)[0].EndsWith(" DETECTION DEAD-LETTERED file=- fields=7 pii=2 non-pii=1 review=4 offsets=payload reason=\"Fixture rejection.\"", StringComparison.Ordinal)
             && rejected.Contains("\"MILLER/JORDAN\" -> not published", StringComparison.Ordinal), "a dead-lettered block gives the reason and no after value");
-        var keptOnly = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, [events[3]]);
-        Check(Section(keptOnly, "PII fields (changed)") == "    (none)" && Section(keptOnly, "Review (a format or keep may be needed)") == "    (none)",
+        var allowedOnly = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, [events[3]]);
+        Check(Section(allowedOnly, "PII fields (changed)") == "    (none)" && Section(allowedOnly, ReviewHeading) == "    (none)",
             "an empty group is printed as (none)");
         // Review R-003: fewer values than events must not fail; a slot without a value keeps the value-free form.
         var shortValues = PresidioDemo.Core.Logging.DetectionLog.FormatBlock(FeedType.PNR, Guid.Empty, events, before: ["MILLER/JORDAN"], after: fictionalAfter);
@@ -147,99 +155,68 @@ internal static class DetectingProtectorChecks
             written[b * perBlock][afterTransaction..] == Lines(valued)[0][afterTransaction..]
             && written.Skip(b * perBlock + 1).Take(perBlock - 1).SequenceEqual(Lines(valued).Skip(1))),
             "400 blocks written from 16 threads at once each come out whole");
-        Console.WriteLine("PASS the detection log writes one grouped block per message, with values only when passed (WR-018, WR-020)");
+        Console.WriteLine("PASS the detection log writes one grouped block per message, with a fix per review line and values only when passed (WR-018, WR-020)");
 
-        // V-06: a removed neighbour or a PNR that is no longer PNR-shaped dead-letters the message.
+        // WR-014 on the shipped file: declared recognizers act, allowed strings and undetected strings stay unchanged.
         string pnrSample = Path.Combine(samples, "PNR", "PNR.txt");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.PNR, ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
-            OverwriteFirst(payload, fields.First(f => f.Value.Length == 9 && f.Value.All(char.IsAsciiDigit)), 'A')), CancellationToken.None),
-            "PNR anchor is missing", "a missing creation-time neighbour dead-letters PNR");
-        await RejectAsync(() => protector.ProtectAsync(FeedType.PNR, ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
-        {
-            int timeSlot = fields.ToList().FindIndex(f => f.Value.Length == 9 && f.Value.All(char.IsAsciiDigit));
-            OverwriteFirst(payload, fields[timeSlot + 1], '-');
-        }), CancellationToken.None), "anchor position is not PNR-shaped", "a PNR that is not PNR-shaped dead-letters PNR");
-
-        // Unmatched strings are masked across their full width, keeping literal * separators (WR-014).
-        Check(DetectingFeedProtector.DefaultMask("Q7 ZZ*AB", '#') == "#####*##", "default mask keeps width and literal *");
         var pnrOutcome = await protector.ProtectAsync(FeedType.PNR, Parse(pnrSample), CancellationToken.None);
-        Check(pnrOutcome.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 1, "PNR.txt has exactly one anchored PNR");
-        Check(pnrOutcome.Events.Any(e => e.Decision == DetectionDecision.MaskedByDefault) && pnrOutcome.Events.Any(e => e.Decision == DetectionDecision.Masked),
-            "PNR.txt masks declared formats and unmatched strings");
-        Console.WriteLine("PASS PNR anchors fail closed and unmatched strings are masked by default");
+        Check(pnrOutcome.Events.Any(e => e.Decision == DetectionDecision.Changed) && pnrOutcome.Events.Any(e => e.Decision == DetectionDecision.Allowed)
+            && pnrOutcome.Events.Any(e => e.Decision == DetectionDecision.NothingDetected), "PNR.txt has changed, allowed and undetected strings");
+        Check(pnrOutcome.Events.Where(e => e.Decision is DetectionDecision.Allowed or DetectionDecision.NothingDetected or DetectionDecision.BelowThreshold)
+            .All(e => pnrOutcome.Values[Parse(pnrSample).Fields[e.Slot].Id] == Parse(pnrSample).Fields[e.Slot].Value), "allowed and undetected strings are published unchanged");
+        // AC-011: no PNR anchor; a message whose creation time is gone still publishes.
+        var noCreationTime = ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
+            OverwriteFirst(payload, fields.First(f => f.Value.Length == 9 && f.Value.All(char.IsAsciiDigit)), 'A'));
+        var stillPublished = await protector.ProtectAsync(FeedType.PNR, noCreationTime, CancellationToken.None);
+        Check(stillPublished.Events.Count == noCreationTime.Fields.Count, "a message without a creation time is protected, not dead-lettered");
 
-        // WR-017: the embedded and optional anchor kinds stay supported although pnr.xml uses neither, so they are checked
-        // with test-only copies of pnr.xml and a fictional reference string written over one long PNR.txt string (same
-        // width). Each copy reconfigures the PNR registry, so the reviewed configuration is restored afterwards.
-        string AnchorFile(string anchors)
+        // Made-up strings through the shipped file (AC-004, AC-005, AC-013).
+        var shipped = await ProtectStringsAsync(protector, "MILLER/JORDAN MR", "Please book a window seat", "1405", "RBY09NOV*APPR CC VI 1234 OK",
+            "Contact Alex Sample", "DOCSDAHK1/P/USA/X1234567/USA/12MAR85/F/09NOV31/MILLER/JORDAN");
+        Check(shipped[0] == "****************", "a declared recognizer masks MILLER/JORDAN MR");
+        Check(shipped[1] == "Please book a window seat", "a string in which nothing is detected is published unchanged");
+        Check(shipped[2] == "1405", "a whole-string allow-list item keeps 1405");
+        Check(shipped[3] == "RBY09NOV*APPR CC VI **** OK", "an allow-list item never releases a detected piece inside a longer string");
+        Check(shipped[4] == "Contact ***********", "Presidio's PERSON is masked by the PERSON anonymizer");
+        Check(!shipped[5].Contains("12MAR85", StringComparison.Ordinal) && !shipped[5].Contains("09NOV31", StringComparison.Ordinal)
+            && shipped[5].StartsWith("DOCSDAHK1/P/", StringComparison.Ordinal), "a DOCS birth date and expiry are masked although they look like allowed dates");
+        Console.WriteLine("PASS the shipped file acts per string: declared recognizers, allow list, unchanged when nothing is detected");
+
+        // AC-003, AC-006, AC-008: test-only files reconfigure the PNR registry, so the shipped one is restored afterwards.
+        string Temporary(string content)
         {
-            string file = Path.Combine(Path.GetTempPath(), "anchors-pnr-" + Guid.NewGuid().ToString("N") + ".xml");
-            File.WriteAllText(file, File.ReadAllText(Path.Combine(recognizers, "pnr.xml"))
-                .Replace("<pnrAnchor after=\"creationTime\" offset=\"1\" />", "<pnrAnchor after=\"creationTime\" offset=\"1\" />\n  " + anchors, StringComparison.Ordinal)
-                .Replace("<keep name=\"docsRecord\"", "<keep name=\"testReference\" scan=\"true\"><pattern>TESTREF \\S{6} .*</pattern></keep>\n  <keep name=\"docsRecord\"", StringComparison.Ordinal));
+            string file = Path.Combine(Path.GetTempPath(), "pnr-" + Guid.NewGuid().ToString("N") + ".xml");
+            File.WriteAllText(file, content);
             return file;
         }
         DetectingFeedProtector Configured(string file)
         {
-            var anchorSets = sets.ToDictionary(pair => pair.Key, pair => pair.Value);
-            anchorSets[FeedType.PNR] = RecognizerConfiguration.LoadFile(file, FeedType.PNR);
-            var configured = new DetectingFeedProtector(anchorSets);
+            var configured = new DetectingFeedProtector(new Dictionary<FeedType, RecognizerFile> { [FeedType.PNR] = RecognizerFileReader.Read(file, FeedType.PNR) });
             configured.Configure();
             return configured;
         }
-        // Writes "TESTREF <pnr> MAIL <fictional e-mail>" (cut to the string's width) over the first long enough string after
-        // the PNR anchor, and optionally replaces the string that follows it; returns the parse and the reference's slot.
-        (ParsedFeed Parsed, int Slot) WithReference(string pnr, string? following = null)
-        {
-            int slot = -1;
-            var parsed = ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
-            {
-                slot = Enumerable.Range(6, fields.Count - 7).First(i => fields[i].Value.Length >= (following is null ? 40 : 15) && (following is null || fields[i + 1].Value.Length == following.Length));
-                Encoding.ASCII.GetBytes(("TESTREF " + pnr + " MAIL JORDAN.MILLER@EXAMPLE.COM").PadRight(fields[slot].Value.Length)[..fields[slot].Value.Length]).CopyTo(payload, Locate(payload, fields[slot].Value));
-                if (following is not null)
-                {
-                    Encoding.ASCII.GetBytes(following).CopyTo(payload, Locate(payload, fields[slot + 1].Value));
-                }
-            });
-            return (parsed, slot);
-        }
-
-        string embedded = AnchorFile("<pnrAnchor within=\"testReference\" optional=\"true\"><pattern>TESTREF (?&lt;pnr>\\S{6}) .*</pattern></pnrAnchor>");
+        string empty = Temporary("<recognizers feed=\"PNR\" />");
+        string noCards = Temporary("<recognizers feed=\"PNR\"><recognizer name=\"CreditCardRecognizer\" type=\"predefined\" enabled=\"false\" />"
+            + "<anonymizer entity=\"PERSON\" type=\"mask\" /></recognizers>");
+        string withDefault = Temporary("<recognizers feed=\"PNR\"><anonymizer entity=\"PERSON\" type=\"mask\" /><anonymizer entity=\"DEFAULT\" type=\"mask\" /></recognizers>");
         try
         {
-            var embeddedProtector = Configured(embedded);
-            var absent = await embeddedProtector.ProtectAsync(FeedType.PNR, Parse(pnrSample), CancellationToken.None);
-            Check(absent.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 1, "an absent optional embedded anchor is not required");
-            var (reference, slot) = WithReference("K7QX2M");
-            var outcome = await embeddedProtector.ProtectAsync(FeedType.PNR, reference, CancellationToken.None);
-            string protectedValue = outcome.Values[reference.Fields[slot].Id];
-            Check(protectedValue[8..14] == "K7QX2M", "the embedded PNR stays unchanged");
-            Check(!protectedValue.Contains("JORDAN.MILLER", StringComparison.Ordinal) && protectedValue.StartsWith("TESTREF ", StringComparison.Ordinal),
-                "the e-mail inside the kept reference is masked while the record syntax stays");
-            await RejectAsync(() => embeddedProtector.ProtectAsync(FeedType.PNR, WithReference("K7-X2M").Parsed, CancellationToken.None),
-                "embedded PNR", "a malformed embedded PNR dead-letters");
-            Console.WriteLine("PASS an embedded PNR is kept while the rest of its string is scanned; a malformed one dead-letters");
+            var bare = await ProtectStringsAsync(Configured(empty), "Please book a window seat", "Contact Alex Sample", "alex@example.com", "Card 4111 1111 1111 1111");
+            Check(bare[0] == "Please book a window seat", "an emptied file starts and publishes an undetected string unchanged");
+            Check(bare[1] == "Contact <PERSON>   " && bare[2] == "<EMAIL_ADDRESS> " && bare[3] == "Card " + "<CREDIT_CARD>".PadRight(19),
+                "with nothing configured Presidio's predefined recognizers detect, and replace is fitted to width");
+            var switchedOff = await ProtectStringsAsync(Configured(noCards), "Card 4111 1111 1111 1111", "Contact Alex Sample", "alex@example.com");
+            Check(switchedOff[0] == "Card 4111 1111 1111 1111", "a predefined recognizer switched off detects nothing");
+            Check(switchedOff[1] == "Contact ***********" && switchedOff[2] == "<EMAIL_ADDRESS> ", "an entity uses its own anonymizer, else replace");
+            var fallback = await ProtectStringsAsync(Configured(withDefault), "alex@example.com");
+            Check(fallback[0] == "****************", "an entity without its own anonymizer uses DEFAULT");
+            Console.WriteLine("PASS an emptied file runs Presidio's defaults; switches and anonymizers change the output with no code change");
         }
         finally
         {
-            File.Delete(embedded);
-        }
-
-        string optional = AnchorFile("<pnrAnchor after=\"testReference\" offset=\"1\" optional=\"true\" />");
-        try
-        {
-            var optionalProtector = Configured(optional);
-            var absent = await optionalProtector.ProtectAsync(FeedType.PNR, Parse(pnrSample), CancellationToken.None);
-            Check(absent.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 1, "an absent optional anchor is not required");
-            var present = await optionalProtector.ProtectAsync(FeedType.PNR, WithReference("A1B2C3", "K7QX2M").Parsed, CancellationToken.None);
-            Check(present.Events.Count(e => e.Decision == DetectionDecision.Anchor) == 2, "a PNR-shaped value at an optional anchor position is kept as a PNR");
-            await RejectAsync(() => optionalProtector.ProtectAsync(FeedType.PNR, WithReference("A1B2C3", "K7-X2M").Parsed, CancellationToken.None),
-                "anchor position is not PNR-shaped", "a malformed value at an optional anchor position dead-letters");
-            Console.WriteLine("PASS an optional anchor may be absent, keeps a PNR-shaped value and dead-letters a malformed one");
-        }
-        finally
-        {
-            File.Delete(optional);
+            File.Delete(empty);
+            File.Delete(noCards);
+            File.Delete(withDefault);
             protector.Configure();
         }
 
@@ -260,22 +237,18 @@ internal static class DetectingProtectorChecks
         Console.WriteLine("PASS messages rejected before detection carry no events or values");
 
         // R-003: a recognizer pattern that times out dead-letters instead of publishing unchecked text. This reconfigures
-        // the PNR registry, so it restores the reviewed configuration afterwards.
-        string slow = Path.Combine(Path.GetTempPath(), "slow-pnr-" + Guid.NewGuid().ToString("N") + ".xml");
-        File.WriteAllText(slow, File.ReadAllText(Path.Combine(recognizers, "pnr.xml"))
-            .Replace("<keep name=\"docsRecord\"", "<format name=\"slowCheck\" entity=\"DEMO_CODE\"><pattern>(A|AA)+$</pattern></format>\n  <keep name=\"docsRecord\"", StringComparison.Ordinal));
+        // the PNR registry, so it restores the shipped configuration afterwards.
+        string slow = Temporary(File.ReadAllText(Path.Combine(recognizers, "pnr.xml")).Replace("</recognizers>",
+            "<recognizer name=\"slowCheck\" type=\"custom\" supported_entity=\"DEMO_CODE\"><pattern name=\"slow\" score=\"0.85\">(A|AA)+$</pattern></recognizer></recognizers>",
+            StringComparison.Ordinal));
         try
         {
-            var slowSets = sets.ToDictionary(pair => pair.Key, pair => pair.Value);
-            slowSets[FeedType.PNR] = RecognizerConfiguration.LoadFile(slow, FeedType.PNR);
-            var slowProtector = new DetectingFeedProtector(slowSets);
-            slowProtector.Configure();
+            var slowProtector = Configured(slow);
             var slowInput = ParseEdited(pnrSample, FeedType.PNR, (fields, payload) =>
             {
                 var target = fields.First(f => f.Value.Length >= 30 && f.Value.All(c => c is >= ' ' and <= '~'));
                 Encoding.ASCII.GetBytes(new string('A', target.Value.Length - 1) + "!").CopyTo(payload, Locate(payload, target.Value));
             });
-            // A format is evaluated in .NET only as an anchor neighbour, so the timeout surfaces from Presidio.
             await RejectAsync(() => slowProtector.ProtectAsync(FeedType.PNR, slowInput, CancellationToken.None),
                 "Local Presidio detection failed", "a pattern timeout dead-letters the message");
         }
@@ -285,7 +258,7 @@ internal static class DetectingProtectorChecks
             protector.Configure();
         }
 
-        // V-12, W-017: raw words such as numeric IDs are never decoded or changed, so a message whose raw word differs is
+        // V-12: raw words such as numeric IDs are never decoded or changed, so a message whose raw word differs is
         // published with that word exactly as received.
         var pnrCodec = new PnrDecoder();
         var pnrMessage = Message(pnrSample, FeedType.PNR);
@@ -306,29 +279,32 @@ internal static class DetectingProtectorChecks
             "PNR raw word published unchanged");
         Console.WriteLine("PASS a PNR message with a changed raw word is published with the word unchanged");
 
-        // V-09, WR-019: narrowing a format breaks parity with the frozen baseline before merge. This reconfigures the
-        // PNR registry, so it runs last and restores the reviewed configuration afterwards.
-        string narrowed = Path.Combine(Path.GetTempPath(), "narrowed-pnr-" + Guid.NewGuid().ToString("N") + ".xml");
-        File.WriteAllText(narrowed, File.ReadAllText(Path.Combine(recognizers, "pnr.xml"))
-            .Replace("<pattern>(?&lt;![A-Z])[A-Z]{2,}(?:[ '-][A-Z]+)*/[A-Z]*(?:[ '-][A-Z]+)*</pattern>", "<pattern>(?&lt;![A-Z])[A-Z]{30,}/[A-Z]{30,}</pattern>", StringComparison.Ordinal));
+        // WR-019: narrowing a recognizer adds parity misses against the frozen baseline. This reconfigures the PNR
+        // registry, so it runs last and restores the shipped configuration afterwards.
+        string narrowed = Temporary(File.ReadAllText(Path.Combine(recognizers, "pnr.xml"))
+            .Replace("(?&lt;![A-Z])[A-Z]{2,}(?:[ '-][A-Z]+)*/[A-Z]*(?:[ '-][A-Z]+)*", "(?&lt;![A-Z])[A-Z]{30,}/[A-Z]{30,}", StringComparison.Ordinal));
         try
         {
-            var narrowedSets = sets.ToDictionary(pair => pair.Key, pair => pair.Value);
-            narrowedSets[FeedType.PNR] = RecognizerConfiguration.LoadFile(narrowed, FeedType.PNR);
             int reviewedMisses = await ParityMissesAsync(protector, projectRoot, FeedType.PNR);
-            Check(reviewedMisses == 0, "reviewed recognizers must have no unapproved PNR parity miss");
-            // The bridge keeps one registry per feed name, so configuring the narrowed set replaces the reviewed one.
-            var narrowedProtector = new DetectingFeedProtector(narrowedSets);
-            narrowedProtector.Configure();
-            int narrowedMisses = await ParityMissesAsync(narrowedProtector, projectRoot, FeedType.PNR);
-            Check(narrowedMisses > 0, "a narrowed name format must fail parity");
-            Console.WriteLine($"PASS a narrowed PNR name format fails parity with the frozen baseline ({narrowedMisses} unapproved misses)");
+            int narrowedMisses = await ParityMissesAsync(Configured(narrowed), projectRoot, FeedType.PNR);
+            Check(narrowedMisses > reviewedMisses, "a narrowed name recognizer must add parity misses");
+            Console.WriteLine($"PASS a narrowed PNR name recognizer adds parity misses ({reviewedMisses} -> {narrowedMisses} unapproved misses)");
         }
         finally
         {
             File.Delete(narrowed);
             protector.Configure();
         }
+    }
+
+    /// <summary>
+    /// Protects made-up strings as one parsed message and returns the published values in order.
+    /// </summary>
+    private static async Task<string[]> ProtectStringsAsync(DetectingFeedProtector protector, params string[] values)
+    {
+        var parsed = new ParsedFeed(values.Select((value, i) => new FeedField(i.ToString(System.Globalization.CultureInfo.InvariantCulture), "slot" + i, value)).ToArray(), new object());
+        var outcome = await protector.ProtectAsync(FeedType.PNR, parsed, CancellationToken.None);
+        return parsed.Fields.Select(f => outcome.Values[f.Id]).ToArray();
     }
 
     /// <summary>

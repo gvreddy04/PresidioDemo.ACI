@@ -43,7 +43,7 @@ public static class DetectionRun
     /// <returns>The configured protector.</returns>
     public static DetectingFeedProtector CreateProtector(string root)
     {
-        var protector = new DetectingFeedProtector(RecognizerConfiguration.Load(Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers")));
+        var protector = new DetectingFeedProtector(RecognizerFileReader.ReadAll(Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers")));
         protector.Configure();
         return protector;
     }

@@ -67,8 +67,8 @@ class ProjectLayoutTests(unittest.TestCase):
             self.assertIn("public abstract class", (core / base).read_text(encoding="utf-8"), base)
         self.assertIn("PNR = 1", (core / "Models/FeedContracts.cs").read_text(encoding="utf-8"), "FeedType keeps PNR's value")
         protector = (core / "Protection/DetectingFeedProtector.cs").read_text(encoding="utf-8")
-        for member in ("Masked = 0", "Kept = 2", "MaskedInside = 3", "Anchor = 4", "MaskedByDefault = 5", "MissedBelowThreshold = 6"):
-            self.assertIn(member, protector, "DetectionDecision keeps its numeric values")
+        for member in ("Changed = 0", "Kept = 1", "Allowed = 2", "NothingDetected = 3", "BelowThreshold = 4"):
+            self.assertIn(member, protector, "DetectionDecision values are explicit (WR-014)")
 
     def test_each_concern_folder_holds_only_the_pnr_feed_and_shared_files(self):
         # PNR-Worker is PNR only (26111201): any other feed's class in these folders fails this check.

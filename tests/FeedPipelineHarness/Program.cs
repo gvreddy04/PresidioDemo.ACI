@@ -184,7 +184,7 @@ static string Summary(IReadOnlyList<FeedType> inputFeeds, IReadOnlyList<(FeedTyp
         text.AppendLine();
         text.AppendLine($"{FeedCatalog.Get(feed).FolderName}  review fields ({inputFeeds.Count(f => f == feed)} files)");
         var rows = detected.Where(d => d.Feed == feed)
-            .SelectMany(d => d.Events.Where(e => DetectionLog.Group(e.Decision) == DetectionGroup.Review).Select(e => (d.File, Event: e)))
+            .SelectMany(d => d.Events.Where(e => DetectionLog.Group(e) == DetectionGroup.Review).Select(e => (d.File, Event: e)))
             .GroupBy(r => (Field: r.Event.Offset is int offset ? $"slot {r.Event.Slot} @0x{offset:X4}" : $"slot {r.Event.Slot}", r.Event.Decision))
             .OrderBy(g => g.Key.Field, StringComparer.Ordinal).ThenBy(g => g.Key.Decision)
             .ToArray();

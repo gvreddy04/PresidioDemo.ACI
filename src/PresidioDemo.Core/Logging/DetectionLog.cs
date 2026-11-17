@@ -15,16 +15,16 @@ namespace PresidioDemo.Core.Logging;
 public enum DetectionGroup
 {
     /// <summary>
-    /// Personal data: the string was changed after a detection (masked, masked-inside).
+    /// Personal data: a configured action changed the string.
     /// </summary>
     Pii,
     /// <summary>
-    /// Not personal data: the string was published unchanged (kept, anchor).
+    /// Unchanged on purpose: an allow-list item or the <c>keep</c> operator left the string as it was.
     /// </summary>
     NonPii,
     /// <summary>
-    /// Worth a recognizer change: masked with no format or keep (masked-by-default), or kept with a weak detection inside
-    /// (missed-below-threshold).
+    /// Worth checking: left unprotected (nothing detected, or below the threshold), changed without an action of its own,
+    /// changed by a spaCy guess, or affected by an overlap or a cut result; each line carries a fix.
     /// </summary>
     Review
 }
@@ -75,14 +75,45 @@ public static class DetectionLog
     /// <returns>A lower-case, hyphenated word.</returns>
     public static string Decision(DetectionDecision decision) => decision switch
     {
-        DetectionDecision.Masked => "masked",
+        DetectionDecision.Changed => "changed",
         DetectionDecision.Kept => "kept",
-        DetectionDecision.MaskedInside => "masked-inside",
-        DetectionDecision.Anchor => "anchor",
-        DetectionDecision.MaskedByDefault => "masked-by-default",
-        DetectionDecision.MissedBelowThreshold => "missed-below-threshold",
+        DetectionDecision.Allowed => "allowed",
+        DetectionDecision.NothingDetected => "nothing-detected",
+        DetectionDecision.BelowThreshold => "below-threshold",
         _ => throw new ArgumentOutOfRangeException(nameof(decision))
     };
+
+    /// <summary>
+    /// Returns the value-free fix a developer can apply for each review reason, joined with <c>; </c>.
+    /// </summary>
+    /// <param name="e">The event.</param>
+    /// <returns>The fix text, or empty when the string is not for review.</returns>
+    public static string Fix(DetectionEvent e) => string.Join("; ", Reasons(e.Reasons).Select(reason => reason switch
+    {
+        ReviewReason.NothingDetected => "add a recognizer if this is personal data, or an allow-list item if it is not",
+        ReviewReason.BelowThreshold => "add context words or raise the pattern score if this is personal data",
+        ReviewReason.NoAction => "add an <anonymizer> for " + e.Entity,
+        ReviewReason.SpacyGuess => "add an allow-list item if this is not personal data",
+        ReviewReason.Overlap => "check which recognizer should win, and adjust a pattern score",
+        ReviewReason.Cut => "use mask for this entity, or a shorter new_value",
+        _ => throw new ArgumentOutOfRangeException(nameof(e))
+    }));
+
+    /// <summary>
+    /// Returns the log words for the review reasons, such as <c>nothing-detected</c>, joined with <c>+</c>.
+    /// </summary>
+    /// <param name="reasons">The reasons.</param>
+    /// <returns>The words, or empty for none.</returns>
+    public static string Reason(ReviewReason reasons) => string.Join('+', Reasons(reasons).Select(reason => reason switch
+    {
+        ReviewReason.NothingDetected => "nothing-detected",
+        ReviewReason.BelowThreshold => "below-threshold",
+        ReviewReason.NoAction => "no-action",
+        ReviewReason.SpacyGuess => "spacy-guess",
+        ReviewReason.Overlap => "overlap",
+        ReviewReason.Cut => "cut",
+        _ => throw new ArgumentOutOfRangeException(nameof(reasons))
+    }));
 
     /// <summary>
     /// Encodes a value or reason as one JSON string. Beyond JSON's own escapes, the relaxed encoder
@@ -122,7 +153,7 @@ public static class DetectionLog
     public static string FormatBlock(FeedType feed, Guid transaction, IReadOnlyList<DetectionEvent> events, string? rejectReason = null,
         IReadOnlyList<string>? before = null, IReadOnlyList<string>? after = null, string? source = null)
     {
-        var groups = Enumerable.Range(0, events.Count).ToLookup(i => Group(events[i].Decision));
+        var groups = Enumerable.Range(0, events.Count).ToLookup(i => Group(events[i]));
         var locations = events.Select(Location).ToArray();
         int width = locations.Select(location => location.Length).DefaultIfEmpty(0).Max();
 
@@ -141,7 +172,7 @@ public static class DetectionLog
         {
             (DetectionGroup.Pii, "PII fields (changed)"),
             (DetectionGroup.NonPii, "Non-PII fields (unchanged)"),
-            (DetectionGroup.Review, "Review (a format or keep may be needed)")
+            (DetectionGroup.Review, "Review (check these; each line has a fix)")
         })
         {
             block.Append(GroupIndent).Append(heading).Append(Environment.NewLine);
@@ -155,32 +186,47 @@ public static class DetectionLog
                 var e = events[index];
                 block.Append(EntryIndent).Append(locations[index].PadRight(width)).Append("  ")
                     .Append(Value(e, group, rejectReason is not null, before, after)).Append("  ")
-                    .Append(CultureInfo.InvariantCulture, $"format={e.Format} entity={(e.Entity.Length == 0 ? "-" : e.Entity)} score={e.Score:0.00} decision={Decision(e.Decision)}")
-                    .Append(Environment.NewLine);
+                    .Append(CultureInfo.InvariantCulture, $"recognizer={e.Recognizer} entity={(e.Entity.Length == 0 ? "-" : e.Entity)} score={e.Score:0.00}");
+                if (e.Reasons.HasFlag(ReviewReason.BelowThreshold))
+                {
+                    block.Append(CultureInfo.InvariantCulture, $"<{e.Threshold:0.00}");
+                }
+                if (e.Operator.Length > 0)
+                {
+                    block.Append(" operator=").Append(e.Operator);
+                }
+                block.Append(" decision=").Append(Decision(e.Decision));
+                if (group == DetectionGroup.Review)
+                {
+                    block.Append(" reason=").Append(Reason(e.Reasons)).Append(" fix=").Append(Encode(Fix(e)));
+                }
+                block.Append(Environment.NewLine);
             }
         }
         return block.ToString();
     }
 
     /// <summary>
-    /// Returns the group a decision is listed in (WR-018).
+    /// Returns the group a decoded string is listed in (WR-018): review when it has any review reason, otherwise PII when
+    /// an action changed it, otherwise non-PII.
     /// </summary>
-    /// <param name="decision">The decision.</param>
+    /// <param name="e">The event.</param>
     /// <returns>The group.</returns>
-    public static DetectionGroup Group(DetectionDecision decision) => decision switch
-    {
-        DetectionDecision.Masked or DetectionDecision.MaskedInside => DetectionGroup.Pii,
-        DetectionDecision.Kept or DetectionDecision.Anchor => DetectionGroup.NonPii,
-        DetectionDecision.MaskedByDefault or DetectionDecision.MissedBelowThreshold => DetectionGroup.Review,
-        _ => throw new ArgumentOutOfRangeException(nameof(decision))
-    };
+    public static DetectionGroup Group(DetectionEvent e) =>
+        e.Reasons != ReviewReason.None ? DetectionGroup.Review : e.Decision == DetectionDecision.Changed ? DetectionGroup.Pii : DetectionGroup.NonPii;
 
     /// <summary>
     /// Returns whether a decision changes the string.
     /// </summary>
     /// <param name="decision">The decision.</param>
-    /// <returns>True for the PII decisions and masked-by-default.</returns>
-    private static bool Changes(DetectionDecision decision) => Group(decision) == DetectionGroup.Pii || decision == DetectionDecision.MaskedByDefault;
+    /// <returns>True when an action changed it.</returns>
+    private static bool Changes(DetectionDecision decision) => decision == DetectionDecision.Changed;
+
+    /// <summary>
+    /// Returns the single reasons set in a combination, in their declared order.
+    /// </summary>
+    private static IEnumerable<ReviewReason> Reasons(ReviewReason reasons) =>
+        Enum.GetValues<ReviewReason>().Where(reason => reason != ReviewReason.None && reasons.HasFlag(reason));
 
     /// <summary>
     /// Returns the <c>file=</c> value of a block header: the source name as it is, <c>-</c> when absent, or JSON-encoded when it

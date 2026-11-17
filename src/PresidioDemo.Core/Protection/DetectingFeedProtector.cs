@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using PresidioDemo.Core.Models;
 
 namespace PresidioDemo.Core.Protection;
@@ -8,34 +7,66 @@ namespace PresidioDemo.Core.Protection;
 #region Enumerations
 
 /// <summary>
-/// What happened to one decoded string; the explicit values keep the existing numeric values (1 was a removed decision).
+/// What happened to one decoded string (WR-014).
 /// </summary>
 public enum DetectionDecision
 {
     /// <summary>
-    /// A format matched the whole string and masked it.
+    /// A configured action changed at least one detected span.
     /// </summary>
-    Masked = 0,
+    Changed = 0,
     /// <summary>
-    /// A keep matched; the string is published unchanged.
+    /// Spans were detected, but their actions (such as <c>keep</c>) left the string unchanged.
     /// </summary>
-    Kept = 2,
+    Kept = 1,
     /// <summary>
-    /// A scanned keep matched; personal-data spans inside it were masked.
+    /// The whole string matched an allow-list item and was published unchanged without analysis.
     /// </summary>
-    MaskedInside = 3,
+    Allowed = 2,
     /// <summary>
-    /// The string is a PNR anchor and is published unchanged (WR-017).
+    /// Nothing was detected; the string is published unchanged.
     /// </summary>
-    Anchor = 4,
+    NothingDetected = 3,
     /// <summary>
-    /// No format or keep matched; the string is masked across its full width (WR-014).
+    /// Only detections below the threshold were found; the string is published unchanged.
     /// </summary>
-    MaskedByDefault = 5,
+    BelowThreshold = 4
+}
+
+/// <summary>
+/// Why a decoded string is listed for review in the detection log (WR-018); a string may have several reasons.
+/// </summary>
+[Flags]
+public enum ReviewReason
+{
     /// <summary>
-    /// A keep matched but a detection below the threshold sits inside it: published, and worth reviewing.
+    /// Not for review.
     /// </summary>
-    MissedBelowThreshold = 6
+    None = 0,
+    /// <summary>
+    /// Published unchanged because nothing was detected.
+    /// </summary>
+    NothingDetected = 1,
+    /// <summary>
+    /// Published unchanged because every detection scored below the threshold.
+    /// </summary>
+    BelowThreshold = 2,
+    /// <summary>
+    /// Changed by an entity with no anonymizer of its own, so <c>DEFAULT</c> or Presidio's <c>replace</c> applied.
+    /// </summary>
+    NoAction = 4,
+    /// <summary>
+    /// Changed by a guess of the spaCy named-entity recognizer.
+    /// </summary>
+    SpacyGuess = 8,
+    /// <summary>
+    /// Detections of different entities overlapped; the higher score won the shared characters.
+    /// </summary>
+    Overlap = 16,
+    /// <summary>
+    /// An action's result was longer than the text it replaced and was cut to fit (WR-015).
+    /// </summary>
+    Cut = 32
 }
 
 #endregion
@@ -48,13 +79,16 @@ public enum DetectionDecision
 /// <param name="Slot">The candidate's order among the message's decoded strings.</param>
 /// <param name="Length">The value length.</param>
 /// <param name="Shape">The character shape: A for a letter, 9 for a digit, other characters unchanged.</param>
-/// <param name="Format">The format or keep name, <c>anchor</c>, or <c>none</c>.</param>
+/// <param name="Recognizer">The recognizer names joined with <c>+</c>, <c>allow_list</c>, or <c>none</c>.</param>
 /// <param name="Entity">The detected entity types, joined with <c>+</c>, or empty.</param>
 /// <param name="Score">The highest detection score, or zero.</param>
 /// <param name="Decision">What happened to the string.</param>
 /// <param name="Offset">The payload byte offset of the string, or null when the codec reports none.</param>
-public sealed record DetectionEvent(int Slot, int Length, string Shape, string Format, string Entity, double Score, DetectionDecision Decision,
-    int? Offset = null);
+/// <param name="Operator">The operators applied, joined with <c>+</c>, or empty.</param>
+/// <param name="Reasons">Why the string is listed for review, or <see cref="ReviewReason.None"/>.</param>
+/// <param name="Threshold">The feed's score threshold, so a review line can compare a weak score with it.</param>
+public sealed record DetectionEvent(int Slot, int Length, string Shape, string Recognizer, string Entity, double Score, DetectionDecision Decision,
+    int? Offset = null, string Operator = "", ReviewReason Reasons = ReviewReason.None, double Threshold = 0);
 
 /// <summary>
 /// The protected values for every parsed field, and one detection event per decoded string.
@@ -71,16 +105,21 @@ public sealed record DetectionOutcome(IReadOnlyDictionary<string, string> Values
 #endregion
 
 /// <summary>
-/// Protects one parsed message with its feed's recognizer set. Every decision is made here; Presidio only returns spans.
-/// Order per string: PNR anchor, a declared format matching the whole string, keep pattern (scanned keeps mask inner
-/// spans), a built-in matching the whole string, otherwise a full-width default mask (WR-014, WR-017, W-020). Every
-/// protection keeps the string's width, so the binary framing stays valid (WR-015).
+/// Protects one parsed message with its feed's recognizer file. Presidio only returns spans; every decision is made here.
+/// Each decoded string is decided on its own (WR-014): a whole-string allow-list match is published unchanged; otherwise
+/// each span at or above the threshold gets its entity's action (its own, else <c>DEFAULT</c>, else <c>replace</c>), and a
+/// string in which nothing is detected is published unchanged. Every result keeps the string's width (WR-015).
 /// </summary>
-/// <param name="sets">The validated recognizer sets by feed.</param>
-public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRecognizerSet> sets) : IFeedProtector
+/// <param name="files">The validated recognizer files by feed.</param>
+public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, RecognizerFile> files) : IFeedProtector
 {
 
     #region Fields and Constants
+
+    /// <summary>
+    /// The name Presidio reports for its spaCy named-entity recognizer.
+    /// </summary>
+    public const string SpacyRecognizer = "SpacyRecognizer";
 
     /// <summary>
     /// Serializes calls into the shared embedded Python engines.
@@ -94,18 +133,18 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     /// <summary>
     /// Builds every feed's Presidio registry. Call once after <see cref="PythonHost.Start"/>.
     /// </summary>
-    /// <exception cref="InvalidDataException">The bridge rejected a configuration.</exception>
+    /// <exception cref="InvalidDataException">The bridge rejected a configuration, such as an unknown predefined recognizer.</exception>
     public void Configure()
     {
-        foreach (var set in sets.Values)
+        foreach (var file in files.Values)
         {
             try
             {
-                PythonHost.Call("configure_feed", set.ToBridgeJson());
+                PythonHost.Call("configure_feed", file.ToBridgeJson());
             }
             catch (Exception)
             {
-                throw new InvalidDataException($"Local Presidio could not load the {FeedCatalog.Get(set.Feed).FolderName} recognizers.");
+                throw new InvalidDataException($"Local Presidio could not load the {FeedCatalog.Get(file.Feed).FolderName} recognizers.");
             }
         }
     }
@@ -117,93 +156,62 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     /// <param name="parsed">The parse from the generic XDR codec.</param>
     /// <param name="cancellationToken">The token that interrupts processing.</param>
     /// <returns>The protected value of every field and one event per decoded string.</returns>
-    /// <exception cref="InvalidDataException">A structural failure: anchor missing or not PNR-shaped, or detection failed.</exception>
+    /// <exception cref="InvalidDataException">Detection failed, a pattern timed out, or an action failed.</exception>
     public async ValueTask<DetectionOutcome> ProtectAsync(FeedType feed, ParsedFeed parsed, CancellationToken cancellationToken)
     {
-        var set = sets[feed];
+        var file = files[feed];
         var candidates = parsed.Fields;
         var values = parsed.Fields.ToDictionary(field => field.Id, field => field.Value, StringComparer.Ordinal);
-        var events = new DetectionEvent?[candidates.Count];
-        Anchoring anchors;
+        var events = new DetectionEvent[candidates.Count];
+        var pending = new List<int>();
         try
         {
-            anchors = Anchors(set, candidates);
-            var pending = new List<int>();
             for (int slot = 0; slot < candidates.Count; slot++)
             {
                 var field = candidates[slot];
                 if (field.Value.Length == 0)
                 {
-                    events[slot] = Event(slot, field, "none", "", 0, DetectionDecision.Kept);
+                    events[slot] = Event(file, slot, field, "none", "", 0, DetectionDecision.NothingDetected);
                 }
-                else if (anchors.Whole.Contains(slot))
+                else if (file.AllowList.MatchesWhole(field.Value))
                 {
-                    events[slot] = Event(slot, field, "anchor", "PNR", 1, DetectionDecision.Anchor);
+                    events[slot] = Event(file, slot, field, "allow_list", "", 0, DetectionDecision.Allowed);
                 }
                 else
                 {
                     pending.Add(slot);
                 }
             }
-
-            var spans = await AnalyzeAsync(feed, pending.Select(slot => candidates[slot].Value).ToArray(), cancellationToken);
-            for (int i = 0; i < pending.Count; i++)
-            {
-                int slot = pending[i];
-                var field = candidates[slot];
-                var found = spans[i];
-                var strong = found.Where(span => span.Score >= set.Threshold).ToArray();
-                var wholeSpans = strong.Where(span => span.Start == 0 && span.End == field.Value.Length).OrderByDescending(span => span.Score).ToArray();
-                // A declared format that matches the whole value wins over a keep, so a keep never publishes a value the
-                // feed's own formats identify (R-004); built-in and NER matches come after keeps, which are reviewed.
-                var formatWhole = wholeSpans.FirstOrDefault(span => set.Formats.Any(format => format.Name == span.Recognizer));
-                var keep = set.Keeps.FirstOrDefault(k => k.MatchesWhole(field.Value));
-                if (formatWhole is not null || (keep is null && wholeSpans.Length > 0))
-                {
-                    var whole = formatWhole ?? wholeSpans[0];
-                    var (mask, name) = Protection(set, whole);
-                    values[field.Id] = new string(mask, field.Value.Length);
-                    events[slot] = Event(slot, field, name, whole.Entity, whole.Score, DetectionDecision.Masked);
-                }
-                else if (keep is not null)
-                {
-                    var inside = keep.Scan ? strong : [];
-                    anchors.Embedded.TryGetValue(slot, out var pnr);
-                    values[field.Id] = MaskSpans(field.Value, inside, set, pnr);
-                    var weak = keep.Scan ? found.Where(span => span.Score < set.Threshold && !inside.Any(s => s.Start <= span.Start && s.End >= span.End)).ToArray() : [];
-                    var decision = inside.Length > 0 ? DetectionDecision.MaskedInside : weak.Length > 0 ? DetectionDecision.MissedBelowThreshold : DetectionDecision.Kept;
-                    var reported = inside.Length > 0 ? inside : weak;
-                    events[slot] = Event(slot, field, keep.Name, Entities(reported), reported.Select(s => s.Score).DefaultIfEmpty(0).Max(), decision);
-                }
-                else
-                {
-                    values[field.Id] = DefaultMask(field.Value, set.DefaultMaskCharacter);
-                    events[slot] = Event(slot, field, "none", Entities(found), found.Select(s => s.Score).DefaultIfEmpty(0).Max(), DetectionDecision.MaskedByDefault);
-                }
-            }
         }
-        catch (RegexMatchTimeoutException)
+        catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
         {
-            throw new InvalidDataException("A recognizer pattern timed out; input retained and no output was published.");
+            throw new InvalidDataException("An allow-list pattern timed out; input retained and no output was published.");
         }
 
-        var detected = events.Select(e => e!).ToArray();
-        var candidateValues = candidates.Select(c => c.Value).ToArray();
-        foreach (int slot in anchors.Whole)
+        var spans = await AnalyzeAsync(feed, pending.Select(slot => candidates[slot].Value).ToArray(), cancellationToken);
+        for (int i = 0; i < pending.Count; i++)
         {
-            if (values[candidates[slot].Id] != candidates[slot].Value)
+            int slot = pending[i];
+            var field = candidates[slot];
+            var strong = spans[i].Where(span => span.Score >= file.Threshold).ToArray();
+            if (strong.Length == 0)
             {
-                throw new DetectionTrace(detected, candidateValues).Reject("Protection changed a PNR.");
+                var weak = spans[i];
+                events[slot] = weak.Length == 0
+                    ? Event(file, slot, field, "none", "", 0, DetectionDecision.NothingDetected, reasons: ReviewReason.NothingDetected)
+                    : Event(file, slot, field, Names(weak.Select(s => s.Recognizer)), Names(weak.Select(s => s.Entity)), weak.Max(s => s.Score),
+                        DetectionDecision.BelowThreshold, reasons: ReviewReason.BelowThreshold);
+                continue;
             }
+            var (value, applied, reasons) = Apply(file, field.Value, strong);
+            values[field.Id] = value;
+            events[slot] = Event(file, slot, field, Names(applied.Select(a => a.Span.Recognizer)), Names(applied.Select(a => a.Span.Entity)),
+                applied.Max(a => a.Span.Score), value == field.Value ? DetectionDecision.Kept : DetectionDecision.Changed,
+                Names(applied.Select(a => Operator(a.Action.Operator))), reasons);
         }
-        foreach (var (slot, (start, length)) in anchors.Embedded)
-        {
-            if (!values[candidates[slot].Id].AsSpan(start, length).SequenceEqual(candidates[slot].Value.AsSpan(start, length)))
-            {
-                throw new DetectionTrace(detected, candidateValues).Reject("Protection changed an embedded PNR.");
-            }
-        }
-        return new DetectionOutcome(values, detected, candidateValues, candidates.Select(c => values[c.Id]).ToArray());
+
+        var detected = events.ToArray();
+        return new DetectionOutcome(values, detected, candidates.Select(c => c.Value).ToArray(), candidates.Select(c => values[c.Id]).ToArray());
     }
 
     /// <summary>
@@ -222,82 +230,71 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     }
 
     /// <summary>
-    /// Masks every character except literal <c>*</c> separators (WR-005, WR-014).
+    /// Returns an operator's Presidio name.
     /// </summary>
-    /// <param name="value">The value.</param>
-    /// <param name="mask">The mask character.</param>
-    /// <returns>The masked value, same width.</returns>
-    public static string DefaultMask(string value, char mask) => new(value.Select(c => c == '*' ? c : mask).ToArray());
+    /// <param name="op">The operator.</param>
+    /// <returns>Such as <c>mask</c>.</returns>
+    public static string Operator(AnonymizerOperator op) => FeedAnonymizer.Operators.Single(pair => pair.Value == op).Key;
 
     /// <summary>
-    /// Finds every PNR anchor (WR-017). A required anchor that is missing, a value at an anchor position that is neither
-    /// PNR-shaped nor a declared keep or format (a malformed PNR), and an embedded PNR that does not match its pattern
-    /// are structural failures.
+    /// Applies the configured actions to the detected spans of one string. Overlaps are resolved by score, then length,
+    /// then position: each character belongs to the first span that claims it, and a span keeps the characters no
+    /// higher-ranked span took; every contiguous run of a span's characters gets that span's action, fitted to its width.
     /// </summary>
-    /// <param name="set">The recognizer set.</param>
-    /// <param name="candidates">The decoded strings.</param>
-    /// <returns>The whole-string anchored slots and the embedded PNR ranges.</returns>
-    /// <exception cref="InvalidDataException">An anchor is missing or malformed.</exception>
-    private static Anchoring Anchors(FeedRecognizerSet set, IReadOnlyList<FeedField> candidates)
+    private static (string Value, IReadOnlyList<(Span Span, AnonymizerAction Action)> Applied, ReviewReason Reasons) Apply(RecognizerFile file, string value,
+        IReadOnlyList<Span> spans)
     {
-        var whole = new HashSet<int>();
-        var embedded = new Dictionary<int, (int Start, int Length)>();
-        foreach (var anchor in set.Anchors)
+        var ranked = spans.OrderByDescending(s => s.Score).ThenByDescending(s => s.End - s.Start).ThenBy(s => s.Start)
+            .ThenBy(s => s.Entity, StringComparer.Ordinal).ToArray();
+        var owner = Enumerable.Repeat(-1, value.Length).ToArray();
+        var reasons = ReviewReason.None;
+        for (int rank = 0; rank < ranked.Length; rank++)
         {
-            int before = whole.Count + embedded.Count;
-            if (anchor.Within is not null)
+            var span = ranked[rank];
+            for (int c = span.Start; c < span.End; c++)
             {
-                var keep = set.Keeps.Single(k => k.Name == anchor.Within);
-                for (int slot = 0; slot < candidates.Count; slot++)
+                if (owner[c] < 0)
                 {
-                    if (!keep.MatchesWhole(candidates[slot].Value))
-                    {
-                        continue;
-                    }
-                    var group = anchor.Capture!.Match(candidates[slot].Value).Groups["pnr"];
-                    if (!group.Success || !FeedRecognizerSet.PnrShape.IsMatch(group.Value))
-                    {
-                        throw new InvalidDataException("An embedded PNR is missing or not PNR-shaped; input retained and no output was published.");
-                    }
-                    embedded[slot] = (group.Index, group.Length);
+                    owner[c] = rank;
                 }
-            }
-            else
-            {
-                string neighbour = anchor.After ?? anchor.Before!;
-                int index = Enumerable.Range(0, candidates.Count).FirstOrDefault(i => set.MatchesNamed(neighbour, candidates[i].Value), -1);
-                int target = index < 0 ? -1 : anchor.After is not null ? index + anchor.Offset : index - anchor.Offset;
-                if (target >= 0 && target < candidates.Count)
+                else if (ranked[owner[c]].Entity != span.Entity)
                 {
-                    string value = candidates[target].Value;
-                    if (FeedRecognizerSet.PnrShape.IsMatch(value))
-                    {
-                        whole.Add(target);
-                    }
-                    else if (!anchor.Optional || !(set.Keeps.Any(k => k.MatchesWhole(value)) || set.Formats.Any(f => f.MatchesWhole(value))))
-                    {
-                        // An optional position may hold another declared value (no PNR present); anything else is a
-                        // malformed PNR and must not be masked and published.
-                        throw new InvalidDataException("The value at a PNR anchor position is not PNR-shaped; input retained and no output was published.");
-                    }
+                    reasons |= ReviewReason.Overlap;
                 }
-            }
-            if (whole.Count + embedded.Count == before && !anchor.Optional)
-            {
-                throw new InvalidDataException("The PNR anchor is missing; input retained and no output was published.");
             }
         }
-        return new Anchoring(whole, embedded);
+
+        var result = value.ToCharArray();
+        var applied = new List<(Span Span, AnonymizerAction Action)>();
+        for (int start = 0; start < value.Length;)
+        {
+            int rank = owner[start];
+            int end = start + 1;
+            while (end < value.Length && owner[end] == rank)
+            {
+                end++;
+            }
+            if (rank >= 0)
+            {
+                var span = ranked[rank];
+                var (action, own) = file.ActionFor(span.Entity);
+                var fitted = FeedAnonymizer.Apply(action, span.Entity, value[start..end]);
+                fitted.Text.CopyTo(0, result, start, end - start);
+                reasons |= (own ? ReviewReason.None : ReviewReason.NoAction) | (fitted.Cut ? ReviewReason.Cut : ReviewReason.None)
+                    | (span.Recognizer == SpacyRecognizer ? ReviewReason.SpacyGuess : ReviewReason.None);
+                if (!applied.Any(a => a.Span == span))
+                {
+                    applied.Add((span, action));
+                }
+            }
+            start = end;
+        }
+        return (new string(result), applied, reasons);
     }
 
     /// <summary>
-    /// Calls the Python bridge once for every pending string of the message.
+    /// Sends one message's decoded strings to the embedded Presidio engine in one batch.
     /// </summary>
-    /// <param name="feed">The feed route.</param>
-    /// <param name="texts">The strings to analyze.</param>
-    /// <param name="cancellationToken">The token that interrupts waiting for the engine.</param>
-    /// <returns>The spans per string.</returns>
-    /// <exception cref="InvalidDataException">Detection failed.</exception>
     private static async ValueTask<IReadOnlyList<Span[]>> AnalyzeAsync(FeedType feed, IReadOnlyList<string> texts, CancellationToken cancellationToken)
     {
         if (texts.Count == 0)
@@ -330,75 +327,21 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     }
 
     /// <summary>
-    /// Masks the given spans in place with each span's own mask character, so a kept value keeps its width, never
-    /// touching an embedded PNR range.
+    /// Creates a value-free event.
     /// </summary>
-    /// <param name="value">The kept value.</param>
-    /// <param name="spans">The spans to protect.</param>
-    /// <param name="set">The recognizer set.</param>
-    /// <param name="pnr">An embedded PNR range to leave unchanged, or the default (empty) range.</param>
-    /// <returns>The value with the spans protected.</returns>
-    private static string MaskSpans(string value, IReadOnlyList<Span> spans, FeedRecognizerSet set, (int Start, int Length) pnr = default)
-    {
-        if (spans.Count == 0)
-        {
-            return value;
-        }
-        var masks = new char?[value.Length];
-        foreach (var span in spans.OrderBy(s => s.Start).ThenByDescending(s => s.End))
-        {
-            char mask = Protection(set, span).Mask;
-            for (int i = span.Start; i < span.End; i++)
-            {
-                if (i < pnr.Start || i >= pnr.Start + pnr.Length)
-                {
-                    masks[i] ??= mask;
-                }
-            }
-        }
-        return new string(value.Select((c, i) => masks[i] ?? c).ToArray());
-    }
+    private static DetectionEvent Event(RecognizerFile file, int slot, FeedField field, string recognizer, string entity, double score, DetectionDecision decision,
+        string op = "", ReviewReason reasons = ReviewReason.None) =>
+        new(slot, field.Value.Length, Shape(field.Value), recognizer, entity, Math.Round(score, 2, MidpointRounding.AwayFromZero), decision, field.Offset, op, reasons,
+            file.Threshold);
 
     /// <summary>
-    /// Returns the mask character of the format or built-in that produced a span, and the name to log.
+    /// Joins distinct names in ordinal order with <c>+</c>.
     /// </summary>
-    /// <param name="set">The recognizer set.</param>
-    /// <param name="span">The span.</param>
-    /// <returns>The mask character and the name to log.</returns>
-    private static (char Mask, string Name) Protection(FeedRecognizerSet set, Span span)
-    {
-        if (set.Formats.FirstOrDefault(f => f.Name == span.Recognizer) is { } format)
-        {
-            return (format.MaskCharacter, format.Name);
-        }
-        if (set.BuiltIns.FirstOrDefault(b => b.Entity == span.Entity) is { } builtIn)
-        {
-            return (builtIn.MaskCharacter, "builtIn:" + builtIn.Entity);
-        }
-        return (set.DefaultMaskCharacter, "builtIn:" + span.Entity);
-    }
-
-    /// <summary>
-    /// Joins the distinct entity types of spans.
-    /// </summary>
-    private static string Entities(IEnumerable<Span> spans) => string.Join('+', spans.Select(s => s.Entity).Distinct().Order(StringComparer.Ordinal));
-
-    /// <summary>
-    /// Creates a value-free event, located by the string's payload offset (WR-018).
-    /// </summary>
-    private static DetectionEvent Event(int slot, FeedField field, string format, string entity, double score, DetectionDecision decision) =>
-        new(slot, field.Value.Length, Shape(field.Value), format, entity, Math.Round(score, 2, MidpointRounding.AwayFromZero), decision, field.Offset);
+    private static string Names(IEnumerable<string> names) => string.Join('+', names.Where(n => n.Length > 0).Distinct().Order(StringComparer.Ordinal));
 
     #endregion
 
     #region Nested Types
-
-    /// <summary>
-    /// The PNR anchors found in one message.
-    /// </summary>
-    /// <param name="Whole">Slots whose whole value is a PNR.</param>
-    /// <param name="Embedded">Slots holding an embedded PNR, with its character range.</param>
-    private sealed record Anchoring(HashSet<int> Whole, Dictionary<int, (int Start, int Length)> Embedded);
 
     /// <summary>
     /// One span returned by Presidio.
@@ -407,7 +350,7 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, FeedRec
     /// <param name="End">The character after the last.</param>
     /// <param name="Entity">The entity type.</param>
     /// <param name="Score">The detection score.</param>
-    /// <param name="Recognizer">The recognizer name: an XML format name or a built-in recognizer.</param>
+    /// <param name="Recognizer">The recognizer name: a custom recognizer's name or a Presidio predefined recognizer.</param>
     private sealed record Span(int Start, int End, string Entity, double Score, string Recognizer);
 
     #endregion

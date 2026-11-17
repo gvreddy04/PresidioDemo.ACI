@@ -26,7 +26,7 @@ if (args is ["config-checks"])
 }
 if (args is ["bridge-json"])
 {
-    foreach (var set in RecognizerConfiguration.Load(Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers")).Values)
+    foreach (var set in RecognizerFileReader.ReadAll(Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers")).Values)
     {
         Console.WriteLine(set.ToBridgeJson());
     }

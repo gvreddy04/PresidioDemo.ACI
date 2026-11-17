@@ -91,7 +91,7 @@ public static class Spike
                 continue;
             }
             misses.Add(new SpikeFinding(entry.Sample, entry.Feed, entry.Location, entry.Length, entry.Entity, DetectingFeedProtector.Shape(before),
-                evt is null ? "rejected" : DetectionLog.Decision(evt.Decision), evt?.Format ?? ""));
+                evt is null ? "rejected" : DetectionLog.Decision(evt.Decision), evt?.Recognizer ?? ""));
             missValues.Add(new { entry.Sample, entry.Location, entry.Entity, Original = before, Published = after });
         }
         var unapproved = misses.Where(m => !exceptions.Any(e => e.Sample == m.Sample && e.Location == m.Location)).ToArray();
@@ -203,7 +203,7 @@ public static class Spike
             if (!protectedToday && result.Outcome!.Values[XdrFeedDecoder.SlotId(candidate.Slot)] != candidate.Value)
             {
                 var evt = result.Outcome.Events[candidate.Slot];
-                yield return new SpikeFinding(sample, feed, candidate.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture), candidate.Length, "", evt.Shape, DetectionLog.Decision(evt.Decision), evt.Format);
+                yield return new SpikeFinding(sample, feed, candidate.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture), candidate.Length, "", evt.Shape, DetectionLog.Decision(evt.Decision), evt.Recognizer);
             }
         }
     }

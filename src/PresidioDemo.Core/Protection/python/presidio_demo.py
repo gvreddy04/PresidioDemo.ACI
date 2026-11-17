@@ -36,32 +36,36 @@ class _TimeoutWatch(logging.Handler):
 _timeouts = _TimeoutWatch()
 logging.getLogger("presidio-analyzer").addHandler(_timeouts)
 
-# Per-feed detection engines built by configure_feed: feed name -> (batch engine or None, entities).
+# Per-feed detection engines built by configure_feed: feed name -> (batch engine or None, language).
 _feeds = {}
 
 
 def configure_feed(config_json):
-    """Build one feed's Presidio registry from the .NET recognizer set (WR-014).
+    """Build one feed's Presidio registry from the .NET recognizer file (WR-014).
 
-    config_json holds feed, formats (name, entity, score, patterns, context) and builtIns (entity names). Built-in
-    recognizers are limited to the listed entities; spaCy NER provides PERSON. The score threshold is applied in .NET.
-    Returns the feed name.
+    config_json holds feed, language, disabled (names of Presidio predefined recognizers switched off) and recognizers
+    (custom: name, entity, patterns of name, regex and score, context, denyList, denyListScore). Every predefined
+    recognizer runs unless it is switched off; spaCy NER provides PERSON, LOCATION, NRP and DATE_TIME. The score
+    threshold and every action are applied in .NET. Returns the feed name.
     """
     config = json.loads(config_json)
-    registry = RecognizerRegistry(supported_languages=["en"])
-    builtins = set(config["builtIns"])
-    if builtins:
-        registry.load_predefined_recognizers(languages=["en"], nlp_engine=nlp_engine)
-        registry.recognizers = [r for r in registry.recognizers if builtins & set(r.supported_entities)]
-    for item in config["formats"]:
-        patterns = [Pattern(item["name"], pattern, float(item["score"])) for pattern in item["patterns"]]
-        registry.add_recognizer(PatternRecognizer(supported_entity=item["entity"], name=item["name"],
-                                                  patterns=patterns, context=item["context"] or None))
-    entities = sorted(builtins | {item["entity"] for item in config["formats"]})
-    # An empty registry would make AnalyzerEngine load every default recognizer, so a feed with nothing to detect
-    # gets no engine at all.
-    engine = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=["en"]) if entities else None
-    _feeds[config["feed"]] = (BatchAnalyzerEngine(engine) if engine else None, entities)
+    language = config["language"]
+    registry = RecognizerRegistry(supported_languages=[language])
+    registry.load_predefined_recognizers(languages=[language], nlp_engine=nlp_engine)
+    disabled = set(config["disabled"])
+    unknown = disabled - {r.name for r in registry.recognizers}
+    if unknown:
+        raise ValueError("Unknown predefined recognizer: " + ", ".join(sorted(unknown)))
+    registry.recognizers = [r for r in registry.recognizers if r.name not in disabled]
+    for item in config["recognizers"]:
+        patterns = [Pattern(p["name"], p["regex"], float(p["score"])) for p in item["patterns"]]
+        registry.add_recognizer(PatternRecognizer(supported_entity=item["entity"], name=item["name"], supported_language=language,
+                                                  patterns=patterns or None, deny_list=item["denyList"] or None,
+                                                  context=item["context"] or None, deny_list_score=float(item["denyListScore"])))
+    # An empty registry would make AnalyzerEngine load every default recognizer, so a feed whose every recognizer is
+    # switched off gets no engine and detects nothing.
+    engine = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=[language]) if registry.recognizers else None
+    _feeds[config["feed"]] = (BatchAnalyzerEngine(engine) if engine else None, language)
     return config["feed"]
 
 
@@ -69,8 +73,8 @@ def analyze_strings(feed, texts_json):
     """Detect personal-data spans in each decoded string of one message, in one batch.
 
     texts_json is a JSON list of strings. Returns a JSON list with one list per string of
-    [start, end, entity, score, recognizer name], with UTF-16 offsets. The recognizer name is the XML format name or
-    the built-in's name.
+    [start, end, entity, score, recognizer name], with UTF-16 offsets. The recognizer name is the custom recognizer's
+    name or the predefined recognizer's class name, such as SpacyRecognizer.
     Raises when a pattern timed out, so the caller dead-letters the message rather than publish unchecked text.
     """
     if feed not in _feeds:
@@ -78,13 +82,13 @@ def analyze_strings(feed, texts_json):
     texts = json.loads(texts_json)
     if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
         raise ValueError("A JSON list of strings is required")
-    engine, entities = _feeds[feed]
+    engine, language = _feeds[feed]
     if engine is None or not texts:
         return json.dumps([[] for _ in texts])
     _timeouts.timed_out = False
-    # Every span is returned, including those below the feed threshold: .NET applies the threshold and logs the rest
-    # as possible misses inside kept values (WR-018).
-    results = list(engine.analyze_iterator(texts, language="en", entities=entities, score_threshold=0.0,
+    # Every span is returned, including those below the feed threshold: .NET applies the threshold and lists a string
+    # with only weak detections for review (WR-018).
+    results = list(engine.analyze_iterator(texts, language=language, score_threshold=0.0,
                                            batch_size=max(1, min(len(texts), 64))))
     if _timeouts.timed_out:
         raise TimeoutError("A recognizer pattern timed out")

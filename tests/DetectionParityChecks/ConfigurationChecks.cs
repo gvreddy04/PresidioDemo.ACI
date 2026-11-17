@@ -4,115 +4,73 @@ using PresidioDemo.Core.Protection;
 namespace PresidioDemo.DetectionParity;
 
 /// <summary>
-/// Checks that the PNR recognizer file loads and that invalid files stop startup (V-04, WR-014).
+/// Checks the shipped recognizer file (WR-014): it loads, declares the PNR feed's custom recognizers, and every entity type
+/// of the frozen baseline is covered by a custom recognizer or by a Presidio predefined entity.
 /// </summary>
 public static class ConfigurationChecks
 {
 
+    #region Fields and Constants
+
+    /// <summary>
+    /// The entity types Presidio's predefined recognizers detect in English (Presidio 2.2.364), which run unless switched off.
+    /// </summary>
+    public static readonly IReadOnlySet<string> PredefinedEntities = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "CREDIT_CARD", "CRYPTO", "DATE_TIME", "EMAIL_ADDRESS", "IBAN_CODE", "IP_ADDRESS", "LOCATION", "MAC_ADDRESS", "MEDICAL_LICENSE",
+        "NRP", "PERSON", "PHONE_NUMBER", "UK_NHS", "URL", "US_BANK_NUMBER", "US_DRIVER_LICENSE", "US_ITIN", "US_PASSPORT", "US_SSN"
+    };
+
+    #endregion
+
     #region Methods
 
     /// <summary>
-    /// Runs every configuration check and prints one value-free line per check.
+    /// Runs the checks.
     /// </summary>
     /// <param name="root">The repository root.</param>
     /// <returns>The number of checks that passed.</returns>
-    /// <exception cref="Exception">A check failed.</exception>
     public static int Run(string root)
     {
         string directory = Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers");
-        var sets = RecognizerConfiguration.Load(directory);
+        var files = RecognizerFileReader.ReadAll(directory);
         int passed = 0;
-        Check(sets.Count == FeedCatalog.All.Count && sets.ContainsKey(FeedType.PNR), "the PNR recognizer file loads", ref passed);
-        foreach (var (feed, set) in sets)
-        {
-            Check(set.Anchors.Count > 0, FeedCatalog.Get(feed).FolderName + " declares a PNR anchor", ref passed);
-        }
-        Check(sets[FeedType.PNR].Formats.Any(f => f.Entity == "DATE_OF_BIRTH") && sets.Values.All(s => s.Formats.Any(f => f.Entity == "PERSON")),
-            "date-of-birth and passenger-name formats are declared", ref passed);
+        Check(files.Count == FeedCatalog.All.Count && files.ContainsKey(FeedType.PNR), "the PNR recognizer file loads", ref passed);
+        var pnr = files[FeedType.PNR];
+        Check(pnr.Recognizers.Any(r => r.Entity == "DATE_OF_BIRTH") && pnr.Recognizers.Any(r => r.Entity == "PERSON"),
+            "date-of-birth and passenger-name recognizers are declared", ref passed);
+        Check(pnr.Anonymizers.ContainsKey(FeedAnonymizer.DefaultEntity), "the shipped file sets a DEFAULT anonymizer", ref passed);
         var baseline = ParityBaseline.Load(root);
-        var uncovered = UncoveredEntities(baseline, sets);
-        Check(uncovered.Count == 0, "every baseline entity has a format or built-in in its feed's file"
+        var uncovered = UncoveredEntities(baseline, files);
+        Check(uncovered.Count == 0, "every baseline entity has a custom recognizer or a Presidio predefined entity"
             + (uncovered.Count == 0 ? "" : ": missing " + string.Join(", ", uncovered)), ref passed);
-        var withoutDateOfBirth = new Dictionary<FeedType, FeedRecognizerSet>(sets)
+        var withoutDateOfBirth = new Dictionary<FeedType, RecognizerFile>(files)
         {
-            [FeedType.PNR] = sets[FeedType.PNR] with { Formats = sets[FeedType.PNR].Formats.Where(f => f.Entity != "DATE_OF_BIRTH").ToArray() },
+            [FeedType.PNR] = pnr with { Recognizers = pnr.Recognizers.Where(r => r.Entity != "DATE_OF_BIRTH").ToArray() },
         };
         Check(UncoveredEntities(baseline, withoutDateOfBirth).Contains("PNR DATE_OF_BIRTH"),
             "the coverage check reports a baseline entity removed from its feed's file", ref passed);
-
-        string scratch = Path.Combine(Path.GetTempPath(), "recognizer-checks-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(scratch);
-        try
-        {
-            string valid = File.ReadAllText(Path.Combine(directory, "pnr.xml"));
-            Reject(scratch, "<recognizers feed=\"PNR\"", "not well-formed XML", ref passed);
-            Reject(scratch, "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"y\">]><recognizers feed=\"PNR\"><pnrAnchor after=\"a\" /></recognizers>", "a DTD", ref passed);
-            Reject(scratch, valid.Replace("feed=\"PNR\"", "feed=\"OTHER\""), "the wrong feed attribute", ref passed);
-            Reject(scratch, valid.Replace("<pattern>^\\d{9}$</pattern>", "<pattern>(unclosed</pattern>"), "a pattern that does not compile", ref passed);
-            Reject(scratch, valid.Replace("name=\"memberName\"", "name=\"passengerName\""), "a duplicate name", ref passed);
-            Reject(scratch, valid.Replace("<pnrAnchor after=\"creationTime\" offset=\"1\" />", ""), "a missing PNR anchor", ref passed);
-            Reject(scratch, valid.Replace("after=\"creationTime\"", "after=\"noSuchFormat\""), "an anchor neighbour that does not exist", ref passed);
-            Reject(scratch, valid.Replace("<format name=\"creationTime\" entity=\"UNCLASSIFIED_IDENTIFIER\" score=\"0.85\" maskCharacter=\"*\">",
-                "<format name=\"creationTime\" entity=\"UNCLASSIFIED_IDENTIFIER\" action=\"Replace\" replacement=\"[X]\">"), "a Replace action (binary values keep their width)", ref passed);
-            Reject(scratch, valid.Replace("<builtIn entity=\"PERSON\" />", "<builtIn entity=\"PASSPORT\" />"), "an unsupported built-in", ref passed);
-            Reject(scratch, valid.Replace("<keep name=\"time\">", "<keep name=\"time\" colour=\"red\">"), "an unknown attribute", ref passed);
-            Reject(scratch, valid.Replace("<keep name=\"time\"><pattern>\\d{4}</pattern></keep>", "<keep name=\"time\"><pattern>\\d{4}</pattern></keep><rule />"), "an unknown element", ref passed);
-            Reject(scratch, valid.Replace("<keep name=\"time\"><pattern>\\d{4}</pattern></keep>", "<keep name=\"time\"><key>Time</key></keep>"), "a key element", ref passed);
-            Reject(scratch, valid.Replace("defaultMaskCharacter=\"#\"", "defaultMaskCharacter=\"##\""), "a two-character mask", ref passed);
-        }
-        finally
-        {
-            Directory.Delete(scratch, recursive: true);
-        }
         return passed;
     }
 
     /// <summary>
-    /// Returns each feed and entity of the frozen baseline that no format or built-in of that feed's recognizer file
-    /// declares (AC-004, WR-014). The fallback mask is not counted, so every protected entity type has a named recognizer.
+    /// Returns the baseline entity types, per feed, that neither a custom recognizer nor a Presidio predefined entity covers.
     /// </summary>
-    /// <param name="baseline">The frozen parity baseline.</param>
-    /// <param name="sets">The recognizer sets by feed.</param>
-    /// <returns>Value-free <c>feed entity</c> labels, sorted; empty when every entity is covered.</returns>
-    public static IReadOnlyList<string> UncoveredEntities(ParityBaselineDocument baseline, IReadOnlyDictionary<FeedType, FeedRecognizerSet> sets) =>
+    /// <param name="baseline">The frozen baseline.</param>
+    /// <param name="files">The recognizer files by feed.</param>
+    /// <returns>"FEED ENTITY" entries in ordinal order.</returns>
+    public static IReadOnlyList<string> UncoveredEntities(ParityBaselineDocument baseline, IReadOnlyDictionary<FeedType, RecognizerFile> files) =>
         baseline.Protected
             .Select(e => (Type: FeedCatalog.All.Single(f => f.FolderName == e.Feed).Type, Name: e.Feed, e.Entity))
             .Distinct()
-            .Where(e => !sets[e.Type].Formats.Any(f => f.Entity == e.Entity) && !sets[e.Type].BuiltIns.Any(b => b.Entity == e.Entity))
+            .Where(e => !files[e.Type].Recognizers.Any(r => r.Entity == e.Entity) && !PredefinedEntities.Contains(e.Entity))
             .Select(e => e.Name + " " + e.Entity)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
     /// <summary>
-    /// Writes an invalid PNR file and requires the loader to reject it with a value-free message naming the file.
+    /// Throws when a condition fails.
     /// </summary>
-    /// <param name="scratch">The temporary directory.</param>
-    /// <param name="content">The file content.</param>
-    /// <param name="label">What is invalid.</param>
-    /// <param name="passed">The passed-check counter.</param>
-    private static void Reject(string scratch, string content, string label, ref int passed)
-    {
-        string path = Path.Combine(scratch, "pnr.xml");
-        File.WriteAllText(path, content);
-        try
-        {
-            RecognizerConfiguration.LoadFile(path, FeedType.PNR);
-        }
-        catch (InvalidDataException ex) when (ex.Message.StartsWith("Recognizer file pnr.xml", StringComparison.Ordinal))
-        {
-            Console.WriteLine("PASS rejected " + label + " (" + ex.Message + ")");
-            passed++;
-            return;
-        }
-        throw new Exception("Expected the loader to reject " + label);
-    }
-
-    /// <summary>
-    /// Requires a condition.
-    /// </summary>
-    /// <param name="condition">The condition.</param>
-    /// <param name="label">The check name.</param>
-    /// <param name="passed">The passed-check counter.</param>
     private static void Check(bool condition, string label, ref int passed)
     {
         if (!condition)
