@@ -62,9 +62,9 @@ class DecodedTextFeedTests(unittest.TestCase):
         for name, reason in EXPECTED_REJECTIONS.items():
             self.assertIn(reason, rejected[name])
 
-    def test_published_samples_keep_framing_pnrs_and_protect_every_baseline_value(self):
+    def test_published_samples_keep_framing_and_protect_every_baseline_value(self):
         document, exceptions = baseline()
-        totals = {"protected": 0, "approved_exceptions": 0, "pnrs_unchanged": 0}
+        totals = {"protected": 0, "approved_exceptions": 0}
         for key, original in self.inputs.items():
             feed, name = key.split("/")
             if "template-" in name or name in EXPECTED_REJECTIONS:
@@ -74,12 +74,11 @@ class DecodedTextFeedTests(unittest.TestCase):
                 totals[k] += counts[k]
         self.assertEqual(totals["protected"] + totals["approved_exceptions"], len(document["protected"]))
         self.assertEqual(totals["approved_exceptions"], len(exceptions))
-        self.assertEqual(totals["pnrs_unchanged"], len(document["pnrs"]))
 
-    def test_template_changes_still_publish_and_mask_the_new_value(self):
+    def test_template_changes_still_publish_and_leave_an_undetected_new_value_unchanged(self):
+        # WR-014: a string in which nothing is detected is published unchanged (and listed for review in the log).
         pnr = payload(self.harness.published("PNR", "template-added-field.bin"))
-        masked = [counted(mask * len(self.added_text)) for mask in "#*"]
-        self.assertTrue(any(pnr.endswith(m) for m in masked), "the added PNR string is masked in full")
+        self.assertTrue(pnr.endswith(counted(self.added_text)), "the added, undetected PNR string is published unchanged")
 
     def test_removed_and_reordered_template_fields_still_publish_protected(self):
         document, exceptions = baseline()
@@ -89,12 +88,10 @@ class DecodedTextFeedTests(unittest.TestCase):
         values = [pnr[int(e["location"]):int(e["location"]) + e["length"]] for e in document["protected"]
                   if e["sample"] == "PNR.txt" and e["length"] >= 4 and ("PNR.txt", e["location"]) not in exceptions]
         values = [v for v in values if v not in published]
-        pnrs = [pnr[int(e["location"]):int(e["location"]) + e["length"]] for e in document["pnrs"] if e["sample"] == "PNR.txt"]
-        self.assertTrue(values and pnrs)
+        self.assertTrue(values)
         for name in ("template-removed-field.bin", "template-reordered-fields.bin"):
             output = payload(self.harness.published("PNR", name))
             self.assertFalse(any(v in output for v in values), f"{name}: a protected PNR value was published")
-            self.assertTrue(all(p in output for p in pnrs), f"{name}: the PNR changed")
 
     def test_detection_log_through_the_harness_is_value_free(self):
         found = blocks(self.harness.console)

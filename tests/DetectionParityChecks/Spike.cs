@@ -20,33 +20,23 @@ namespace PresidioDemo.DetectionParity;
 public sealed record ParityException(string Sample, string Location, string Reason, string? ApprovedBy = null);
 
 /// <summary>
-/// One listed false positive: a decoded string that is masked although the baseline protects nothing inside it (WR-019).
-/// </summary>
-/// <param name="Sample">The sample file name.</param>
-/// <param name="Feed">The feed folder name.</param>
-/// <param name="Location">The payload offset of the string.</param>
-/// <param name="Length">The string length.</param>
-/// <param name="Reason">Why masking it is accepted.</param>
-public sealed record FalsePositiveEntry(string Sample, string Feed, string Location, int Length, string Reason);
-
-/// <summary>
-/// A value-free finding: where, what entity, which format decided, and the character shape.
+/// A value-free finding: where, what entity, which recognizer decided, and the character shape.
 /// </summary>
 /// <param name="Sample">The sample file name.</param>
 /// <param name="Feed">The feed folder name.</param>
 /// <param name="Location">The payload offset.</param>
 /// <param name="Length">The value length.</param>
-/// <param name="Entity">The baseline entity, or empty for a false positive.</param>
+/// <param name="Entity">The baseline entity.</param>
 /// <param name="Shape">The character shape of the value.</param>
 /// <param name="Decision">The decoded-text decision for the containing string.</param>
-/// <param name="Format">The format or keep that decided.</param>
+/// <param name="Format">The recognizer names that decided, or empty.</param>
 public sealed record SpikeFinding(string Sample, string Feed, string Location, int Length, string Entity, string Shape, string Decision, string Format);
 
 #endregion
 
 /// <summary>
-/// The decoded-text spike (T-009, V-01, V-02, V-11): parity against the value-free baseline, PNRs, rebuilds,
-/// false positives, negative samples and throughput.
+/// The decoded-text spike (V-01, V-02, V-11): parity against the value-free baseline (WR-019), rebuilds, negative samples
+/// and throughput. Extra masking outside the baseline never fails it.
 /// </summary>
 public static class Spike
 {
@@ -59,7 +49,7 @@ public static class Spike
     /// <param name="root">The repository root.</param>
     /// <param name="output">The run folder under <c>.test-runs</c>.</param>
     /// <param name="rounds">How many rounds over the production samples the throughput run makes.</param>
-    /// <returns>True when parity holds and every false positive is listed in <c>false-positives.json</c>.</returns>
+    /// <returns>True when every baseline value is protected or an approved exception and every sample rebuilds (WR-019).</returns>
     public static async Task<bool> RunAsync(string root, string output, int rounds)
     {
         var baseline = ParityBaseline.Load(root);
@@ -67,8 +57,6 @@ public static class Spike
         var exceptions = File.Exists(exceptionsFile)
             ? JsonSerializer.Deserialize<List<ParityException>>(File.ReadAllText(exceptionsFile), ParityBaseline.JsonOptions) ?? []
             : [];
-        var listedFalsePositives = JsonSerializer.Deserialize<List<FalsePositiveEntry>>(
-            File.ReadAllText(Path.Combine(root, "tests", "fixtures", "false-positives.json")), ParityBaseline.JsonOptions) ?? [];
         var protector = DetectionRun.CreateProtector(root);
 
         var results = new List<SampleResult>();
@@ -96,21 +84,12 @@ public static class Spike
         }
         var unapproved = misses.Where(m => !exceptions.Any(e => e.Sample == m.Sample && e.Location == m.Location)).ToArray();
 
-        int pnrKept = baseline.Pnrs.Count(pnr => Inspect(byName[pnr.Sample], pnr.Location, pnr.Length) is { Before: var b, After: var a } && b == a && a.Length > 0);
         var production = results.Where(r => !Path.GetFileName(r.Path).Contains("Negative_Testing", StringComparison.Ordinal)).ToArray();
         int rebuilt = production.Count(r => r.Output is not null);
 
-        var falsePositives = new List<SpikeFinding>();
-        foreach (var result in production.Where(r => r.Output is not null))
-        {
-            falsePositives.AddRange(FalsePositives(result, baseline.Protected.Where(e => e.Sample == Path.GetFileName(result.Path)).ToArray()));
-        }
-
-        var unlistedFalsePositives = falsePositives
-            .Where(f => !listedFalsePositives.Any(l => l.Sample == f.Sample && l.Location == f.Location && l.Length == f.Length)).ToArray();
-
         var throughput = await Throughput(protector, production.Select(r => r.Path).ToArray(), rounds);
-        bool parity = unapproved.Length == 0 && pnrKept == baseline.Pnrs.Count && rebuilt == production.Length && unlistedFalsePositives.Length == 0;
+        // WR-019: a baseline value published unchanged fails until it is protected or approved; extra masking never fails.
+        bool parity = unapproved.Length == 0 && rebuilt == production.Length;
         var negatives = results.Where(r => Path.GetFileName(r.Path).Contains("Negative_Testing", StringComparison.Ordinal))
             .Select(r => new { Sample = Path.GetFileName(r.Path), Status = r.Output is null ? "rejected" : "published", Reason = r.Reason ?? "" }).ToArray();
 
@@ -118,13 +97,9 @@ public static class Spike
         {
             Parity = parity ? "PASS" : "FAIL",
             Protected = new { Baseline = baseline.Protected.Count, Caught = caught.Count, Missed = misses.Count, ApprovedExceptions = misses.Count - unapproved.Length, Unapproved = unapproved.Length },
-            Pnrs = new { Baseline = baseline.Pnrs.Count, Unchanged = pnrKept },
             Rebuilds = new { Production = production.Length, Valid = rebuilt },
-            FalsePositives = falsePositives.Count,
-            UnlistedFalsePositives = unlistedFalsePositives.Length,
             Negatives = negatives,
             Misses = misses,
-            FalsePositiveList = falsePositives,
             Throughput = throughput,
             Rejected = results.Where(r => r.Output is null).Select(r => new { Sample = Path.GetFileName(r.Path), Reason = r.Reason ?? "" })
         };
@@ -133,11 +108,10 @@ public static class Spike
         File.WriteAllText(Path.Combine(output, "report.json"), JsonSerializer.Serialize(new
         {
             Note = "Local spike report: contains original sample values. Never commit or copy outside .test-runs.",
-            Misses = missValues,
-            FalsePositives = falsePositives.Select(f => new { f.Sample, f.Location, f.Format, Original = Value(byName[f.Sample], f.Location, f.Length) })
+            Misses = missValues
         }, ParityBaseline.JsonOptions) + Environment.NewLine);
         Console.WriteLine($"SPIKE parity={summary.Parity} | protected {caught.Count}/{baseline.Protected.Count} caught, {misses.Count} missed ({unapproved.Length} unapproved) | " +
-            $"PNRs {pnrKept}/{baseline.Pnrs.Count} | rebuilds {rebuilt}/{production.Length} | false positives {falsePositives.Count} ({unlistedFalsePositives.Length} unlisted)");
+            $"rebuilds {rebuilt}/{production.Length}");
         Console.WriteLine("SPIKE throughput " + JsonSerializer.Serialize(throughput));
         Console.WriteLine("SPIKE summary " + Path.Combine(output, "summary.json"));
         return parity;
@@ -163,11 +137,6 @@ public static class Spike
     }
 
     /// <summary>
-    /// Returns the value at a location in the original sample.
-    /// </summary>
-    private static string Value(SampleResult result, string location, int length) => Value(result.Original, result, location, length, original: true);
-
-    /// <summary>
     /// Returns the payload bytes at a location in a message.
     /// </summary>
     private static string Value(byte[] message, SampleResult result, string location, int length, bool original)
@@ -188,24 +157,6 @@ public static class Spike
         int offset = int.Parse(location, System.Globalization.CultureInfo.InvariantCulture);
         var candidate = XdrFeedDecoder.Candidates(result.Parsed).FirstOrDefault(c => offset >= c.Offset && offset + length <= c.Offset + c.Length);
         return candidate is null ? null : result.Outcome.Events.FirstOrDefault(e => e.Slot == candidate.Slot);
-    }
-
-    /// <summary>
-    /// Lists decoded strings that changed although the baseline protects nothing inside them.
-    /// </summary>
-    private static IEnumerable<SpikeFinding> FalsePositives(SampleResult result, IReadOnlyList<ParityEntry> entries)
-    {
-        string feed = FeedCatalog.Get(result.Feed).FolderName;
-        string sample = Path.GetFileName(result.Path);
-        foreach (var candidate in XdrFeedDecoder.Candidates(result.Parsed!))
-        {
-            bool protectedToday = entries.Any(e => int.Parse(e.Location, System.Globalization.CultureInfo.InvariantCulture) is var o && o >= candidate.Offset && o < candidate.Offset + candidate.Length);
-            if (!protectedToday && result.Outcome!.Values[XdrFeedDecoder.SlotId(candidate.Slot)] != candidate.Value)
-            {
-                var evt = result.Outcome.Events[candidate.Slot];
-                yield return new SpikeFinding(sample, feed, candidate.Offset.ToString(System.Globalization.CultureInfo.InvariantCulture), candidate.Length, "", evt.Shape, DetectionLog.Decision(evt.Decision), evt.Recognizer);
-            }
-        }
     }
 
     /// <summary>

@@ -10,7 +10,7 @@ using PresidioDemo.DetectionParity;
 //   bridge-json     Prints each feed's Presidio bridge configuration, one JSON document per line (Python tests).
 //   detection-log on|off   Runs all samples through the decoded-text path and prints the value-free detection log
 //                          when on (V-05). The worker reads the same switch from Presidio:DetectionLog.
-//   spike [rounds]  Parity, PNRs, rebuilds, false positives, negative samples and
+//   spike [rounds]  Parity of the protected values (WR-019), rebuilds, negative samples and
 //                   throughput (V-01, V-02, V-11). Writes .test-runs/spike-*/summary.json (value-free) and report.json
 //                   (values, Local only). Exit 0 when parity holds, 2 when it does not.
 // Exit codes: 0 success, 1 failure.

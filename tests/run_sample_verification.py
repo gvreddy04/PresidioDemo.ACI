@@ -1,6 +1,6 @@
 """Run all supplied samples through the real feed workers and retain value-free verification evidence.
 
-Every published sample must keep its MQ metadata, framing and PNRs, and protect every value of the frozen parity
+Every published sample must keep its MQ metadata and framing, and protect every value of the frozen parity
 baseline (tests/fixtures/parity-baseline.json) unless it is an approved exception (parity-exceptions.json). A negative
 sample listed in EXPECTED_REJECTIONS must be rejected with its reason. Exit 0 when every check passes, 1 otherwise.
 """
@@ -63,12 +63,10 @@ for item in batch["Items"]:
 statuses = Counter(item["Status"] for item in batch["Items"])
 # The harness exits 2 when a message is rejected, 0 when every message is published.
 passed = (completed.returncode == (2 if EXPECTED_REJECTIONS else 0) and all(r["verification"] == "Passed" for r in results)
-          and totals["protected"] + totals["approved_exceptions"] == len(document["protected"])
-          and totals["pnrs_unchanged"] == len(document["pnrs"]))
+          and totals["protected"] + totals["approved_exceptions"] == len(document["protected"]))
 summary = dict(started_at=started.isoformat(), command=command, application_exit_code=completed.returncode,
                total_samples=len(results), statuses=dict(statuses), baseline_protected=len(document["protected"]),
                protected=totals["protected"], approved_exceptions=totals["approved_exceptions"],
-               baseline_pnrs=len(document["pnrs"]), pnrs_unchanged=totals["pnrs_unchanged"],
                all_checks_passed=passed, samples=results)
 evidence = run / "verification.json"
 evidence.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

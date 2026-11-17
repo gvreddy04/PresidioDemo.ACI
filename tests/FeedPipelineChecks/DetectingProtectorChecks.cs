@@ -279,16 +279,17 @@ internal static class DetectingProtectorChecks
             "PNR raw word published unchanged");
         Console.WriteLine("PASS a PNR message with a changed raw word is published with the word unchanged");
 
-        // WR-019: narrowing a recognizer adds parity misses against the frozen baseline. This reconfigures the PNR
+        // WR-019: narrowing a recognizer breaks parity with the frozen baseline before merge. This reconfigures the PNR
         // registry, so it runs last and restores the shipped configuration afterwards.
         string narrowed = Temporary(File.ReadAllText(Path.Combine(recognizers, "pnr.xml"))
             .Replace("(?&lt;![A-Z])[A-Z]{2,}(?:[ '-][A-Z]+)*/[A-Z]*(?:[ '-][A-Z]+)*", "(?&lt;![A-Z])[A-Z]{30,}/[A-Z]{30,}", StringComparison.Ordinal));
         try
         {
             int reviewedMisses = await ParityMissesAsync(protector, projectRoot, FeedType.PNR);
+            Check(reviewedMisses == 0, "the shipped recognizers must have no unapproved PNR parity miss");
             int narrowedMisses = await ParityMissesAsync(Configured(narrowed), projectRoot, FeedType.PNR);
-            Check(narrowedMisses > reviewedMisses, "a narrowed name recognizer must add parity misses");
-            Console.WriteLine($"PASS a narrowed PNR name recognizer adds parity misses ({reviewedMisses} -> {narrowedMisses} unapproved misses)");
+            Check(narrowedMisses > 0, "a narrowed name recognizer must fail parity");
+            Console.WriteLine($"PASS a narrowed PNR name recognizer fails parity with the frozen baseline ({narrowedMisses} unapproved misses)");
         }
         finally
         {
