@@ -23,8 +23,8 @@ static class FeedTransactionLogChecks
             var result = new FeedWorkflowResult(Encoding.ASCII.GetBytes("######/######"),
                 [new("0", "0", "MILLER/JORDAN", 0)], [new("0", "0", "######/######", 0)]);
             // The harness passes the values-mode detection block; a fictional one is enough to check its place.
-            string block = "PNR 0 DETECTION PUBLISHED strings=1 pii=1 non-pii=0 review=0" + Environment.NewLine + "  PII fields (changed)" + Environment.NewLine
-                + "    slot 0 @0x0000  \"MILLER/JORDAN\" -> \"######/######\"  format=passengerName entity=PERSON score=0.90 decision=masked" + Environment.NewLine;
+            string block = "PNR 0 DETECTION PUBLISHED file=- fields=1 pii=1 non-pii=0 review=0" + Environment.NewLine + "  PII fields (changed)" + Environment.NewLine
+                + "    slot 0 @0x0000  \"MILLER/JORDAN\" -> \"######/######\"  recognizer=passengerName entity=PERSON score=0.90 operator=mask decision=changed" + Environment.NewLine;
             string text = FeedLoggers.Format(input, result, null, block);
             string[] sections = text.Split("AFTER ANONYMIZATION");
             Require(sections.Length == 2 && sections[0].Contains("MILLER/JORDAN") && !sections[1].Contains("MILLER/JORDAN") && sections[1].Contains("######/######"), "Comparison sections mix original and protected data.");

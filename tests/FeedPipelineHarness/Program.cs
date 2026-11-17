@@ -174,19 +174,19 @@ string Correlation(int i)
 }
 
 // Lists, per feed, every review-group field across the run (WR-021), by slot and payload offset. No string value is
-// written: only the decision, character shapes, a count and the file names.
+// written: only the review reasons, character shapes, a count and the file names.
 static string Summary(IReadOnlyList<FeedType> inputFeeds, IReadOnlyList<(FeedType Feed, string File, IReadOnlyList<DetectionEvent> Events)> detected)
 {
     var text = new System.Text.StringBuilder();
-    text.AppendLine("Detection summary: review-group fields per feed (value-free; a format or keep may be needed)");
+    text.AppendLine("Detection summary: review-group fields per feed (value-free; the detection log gives a fix for each)");
     foreach (var feed in FeedCatalog.All.Select(f => f.Type).Where(inputFeeds.Contains))
     {
         text.AppendLine();
         text.AppendLine($"{FeedCatalog.Get(feed).FolderName}  review fields ({inputFeeds.Count(f => f == feed)} files)");
         var rows = detected.Where(d => d.Feed == feed)
             .SelectMany(d => d.Events.Where(e => DetectionLog.Group(e) == DetectionGroup.Review).Select(e => (d.File, Event: e)))
-            .GroupBy(r => (Field: r.Event.Offset is int offset ? $"slot {r.Event.Slot} @0x{offset:X4}" : $"slot {r.Event.Slot}", r.Event.Decision))
-            .OrderBy(g => g.Key.Field, StringComparer.Ordinal).ThenBy(g => g.Key.Decision)
+            .GroupBy(r => (Field: r.Event.Offset is int offset ? $"slot {r.Event.Slot} @0x{offset:X4}" : $"slot {r.Event.Slot}", Reason: DetectionLog.Reason(r.Event.Reasons)))
+            .OrderBy(g => g.Key.Field, StringComparer.Ordinal).ThenBy(g => g.Key.Reason, StringComparer.Ordinal)
             .ToArray();
         if (rows.Length == 0)
         {
@@ -198,7 +198,7 @@ static string Summary(IReadOnlyList<FeedType> inputFeeds, IReadOnlyList<(FeedTyp
         {
             string shapes = string.Join(", ", row.Select(r => r.Event.Shape).Distinct(StringComparer.Ordinal).Take(3));
             string files = string.Join(", ", row.Select(r => r.File).Distinct(StringComparer.Ordinal));
-            text.AppendLine($"  {row.Key.Field.PadRight(width)}  {DetectionLog.Decision(row.Key.Decision),-22}  seen={row.Count()}  shapes={shapes}  files={files}");
+            text.AppendLine($"  {row.Key.Field.PadRight(width)}  {row.Key.Reason,-22}  seen={row.Count()}  shapes={shapes}  files={files}");
         }
     }
     return text.ToString();

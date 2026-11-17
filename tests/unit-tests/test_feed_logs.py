@@ -11,11 +11,13 @@ from pipeline_harness import PROJECT, run
 SPIKE = PROJECT / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
 HEADER = re.compile(r"^(\S+) ([0-9a-f]{32}) DETECTION (PUBLISHED|DEAD-LETTERED) file=(?:\S+) fields=(\d+) pii=(\d+) non-pii=(\d+) review=(\d+)"
                     r"( offsets=payload)?( reason=(\".*\"))?$")
-TAIL = re.compile(r"  format=(\S+) entity=(\S+) score=(\d\.\d\d) "
-                  r"decision=(masked|kept|masked-inside|anchor|masked-by-default|missed-below-threshold)$")
-GROUPS = {"  PII fields (changed)": "pii", "  Non-PII fields (unchanged)": "non-pii", "  Review (a format or keep may be needed)": "review"}
-DECISIONS = {"pii": {"masked", "masked-inside"}, "non-pii": {"kept", "anchor"},
-             "review": {"masked-by-default", "missed-below-threshold"}}
+TAIL = re.compile(r"  recognizer=(\S+) entity=(\S+) score=(\d\.\d\d)(?:<\d\.\d\d)?(?: operator=(\S+))? "
+                  r"decision=(changed|kept|allowed|nothing-detected|below-threshold)(?: reason=(\S+) fix=(\".*\"))?$")
+GROUPS = {"  PII fields (changed)": "pii", "  Non-PII fields (unchanged)": "non-pii", "  Review (check these; each line has a fix)": "review"}
+# An empty decoded string is nothing-detected without a review reason, so it is listed as non-PII.
+DECISIONS = {"pii": {"changed"}, "non-pii": {"kept", "allowed", "nothing-detected"},
+             "review": {"changed", "kept", "nothing-detected", "below-threshold"}}
+REASONS = {"nothing-detected", "below-threshold", "no-action", "spacy-guess", "overlap", "cut"}
 
 
 def payload_of(content):
@@ -99,6 +101,8 @@ class DetectionLogTests(unittest.TestCase):
         cls.off = detection_log("off")
 
     def test_every_decoded_string_is_listed_once_in_its_group(self):
+        # A message dead-lettered after detection keeps its block with values (WR-020): with no PNR anchor, no recognizer
+        # file can force that rejection any more, so FeedPipelineChecks covers it with a codec whose rebuild check fails.
         expected = sum(int(m.group(1)) for m in re.finditer(r"^SAMPLE \S+ candidates=(\d+)", self.on, re.M))
         found = blocks(self.on)
         self.assertGreater(expected, 0)
@@ -112,8 +116,14 @@ class DetectionLogTests(unittest.TestCase):
             self.assertIsNotNone(header.group(8), "every block names its offset base")
             for group, line in entries:
                 tail = TAIL.search(line)
-                self.assertIsNotNone(tail, "an entry ends with format, entity, score and decision")
-                self.assertIn(tail.group(4), DECISIONS[group], "a decision is listed in its own group")
+                self.assertIsNotNone(tail, "an entry ends with recognizer, entity, score, operator and decision")
+                self.assertIn(tail.group(5), DECISIONS[group], "a decision is listed in its own group")
+                if group == "review":
+                    self.assertIsNotNone(tail.group(6), "a review entry names its reason")
+                    self.assertTrue(set(tail.group(6).split("+")) <= REASONS, "a review reason is one of the known reasons")
+                    self.assertGreater(len(json.loads(tail.group(7))), 0, "a review entry carries a fix")
+                else:
+                    self.assertIsNone(tail.group(6), "only review entries carry a reason")
 
     def test_no_sample_value_appears_in_the_log(self):
         text = "\n".join("\n".join(b["lines"][1:]) for b in blocks(self.on))
@@ -197,7 +207,7 @@ class DetectionLogValuesTests(unittest.TestCase):
             for group, line in block["entries"]:
                 before, after = values_of(line)
                 self.assertIsInstance(before, str)
-                changed = group == "pii" or "decision=masked-by-default" in line
+                changed = " decision=changed" in line
                 self.assertEqual(after is not None, changed, "a changed string shows before -> after; an unchanged one, its value once")
 
     def test_value_free_mode_still_has_no_values(self):
@@ -250,48 +260,6 @@ class DetectionLogValuesTests(unittest.TestCase):
                         "every summary entry is located by slot and payload offset")
         # Only the entries are scanned; the feed heading is a label.
         self.assertEqual(leaked_values("\n".join(entries)), [], "values found in the summary")
-
-
-class DetectionLogValuesRejectionTests(unittest.TestCase):
-    """WR-020: a message dead-lettered after detection ran still gets its block, with values but no after values."""
-
-    @classmethod
-    def setUpClass(cls):
-        import shutil
-        import tempfile
-        source = PROJECT / "src" / "PresidioDemo.Core" / "Configuration" / "recognizers"
-        cls.folder = tempfile.TemporaryDirectory(prefix="widened-recognizers-", dir=PROJECT / ".test-runs")
-        cls.addClassCleanup(cls.folder.cleanup)
-        for path in source.glob("*.xml"):
-            shutil.copy(path, cls.folder.name)
-        # Test-only recognizers: a PNR embedded in the COCOM record (an optional embedded anchor) and a declared format
-        # matching that whole record, which wins over its keep and would mask the embedded PNR: rejected after detection.
-        pnr = Path(cls.folder.name) / "pnr.xml"
-        text = pnr.read_text(encoding="utf-8")
-        anchor, keep = '<pnrAnchor after="creationTime" offset="1" />', '<keep name="cocomRecord"'
-        assert text.count(anchor) == 1 and text.count(keep) == 1
-        text = text.replace(anchor, anchor + '\n  <pnrAnchor within="cocomRecord" optional="true">'
-                                    r'<pattern>COCOM-[A-Z]{2}/(?&lt;pnr>[A-Z]{2}\d{4})\d{2,8}-GUID/</pattern></pnrAnchor>')
-        text = text.replace(keep, '<format name="wholeCocom" entity="UNCLASSIFIED_IDENTIFIER" score="0.95" maskCharacter="*">'
-                                  r'<pattern>COCOM-[A-Z]{2}/[A-Z]{2}\d{6,12}-GUID/</pattern></format>' + '\n  ' + keep)
-        pnr.write_text(text, encoding="utf-8")
-        sample = (PROJECT / "docs" / "sample-docs" / "PNR" / "PNR.txt").read_bytes()
-        cls.result = run({"PNR/PNR.txt": sample}, extra_args=["--detection-log", "values", "--recognizer-directory", cls.folder.name],
-                         expect=2, prefix="detection-rejected-")
-        cls.addClassCleanup(cls.result.cleanup)
-
-    def test_dead_lettered_after_detection_writes_a_block_with_its_reason(self):
-        item = self.result.status("PNR", "PNR.txt", "Rejected")
-        self.assertIn("Protection changed an embedded PNR", self.result.reason("PNR", "PNR.txt"))
-        found = [b for b in blocks(self.result.console) if b["header"].group(2) == item["MessageId"]]
-        self.assertEqual(len(found), 1)
-        header = found[0]["header"]
-        self.assertEqual(header.group(3), "DEAD-LETTERED")
-        self.assertIn("Protection changed an embedded PNR", json.loads(header.group(10)))
-        changed = [line for group, line in found[0]["entries"] if group == "pii"]
-        self.assertGreater(len(changed), 0)
-        self.assertTrue(all(line.split("  format=")[0].endswith(" -> not published") for line in changed))
-        self.assertTrue(all(values_of(line)[0] for _, line in found[0]["entries"]))
 
 
 if __name__ == "__main__":
