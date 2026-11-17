@@ -69,8 +69,11 @@ public sealed record AllowList(bool Regex, IReadOnlyList<string> Items, IReadOnl
 /// <param name="Recognizers">The custom recognizers.</param>
 /// <param name="AllowList">The whole-string allow list.</param>
 /// <param name="Anonymizers">The actions by entity, including <c>DEFAULT</c> when configured.</param>
+/// <param name="Enabled">The names of Presidio predefined recognizers the file lists as enabled; they run anyway, but their names
+/// are checked so a typo stops startup.</param>
 public sealed record RecognizerFile(FeedType Feed, string Language, double Threshold, IReadOnlyList<string> Disabled,
-    IReadOnlyList<CustomRecognizer> Recognizers, AllowList AllowList, IReadOnlyDictionary<string, AnonymizerAction> Anonymizers)
+    IReadOnlyList<CustomRecognizer> Recognizers, AllowList AllowList, IReadOnlyDictionary<string, AnonymizerAction> Anonymizers,
+    IReadOnlyList<string>? Enabled = null)
 {
 
     #region Methods
@@ -94,6 +97,7 @@ public sealed record RecognizerFile(FeedType Feed, string Language, double Thres
         feed = FeedCatalog.Get(Feed).FolderName,
         language = Language,
         disabled = Disabled,
+        enabled = Enabled ?? [],
         recognizers = Recognizers.Select(r => new
         {
             name = r.Name,
@@ -202,6 +206,7 @@ public static class RecognizerFileReader
 
         var names = new HashSet<string>(StringComparer.Ordinal);
         var disabled = new List<string>();
+        var enabled = new List<string>();
         var recognizers = new List<CustomRecognizer>();
         var anonymizers = new Dictionary<string, AnonymizerAction>(StringComparer.Ordinal);
         AllowList? allowList = null;
@@ -216,10 +221,7 @@ public static class RecognizerFileReader
                         case "predefined":
                             Attributes(element, file, "name", "type", "enabled");
                             Require(!element.HasElements, file, $"predefined recognizer '{name}' takes no child elements");
-                            if (!Enabled(element, file, name))
-                            {
-                                disabled.Add(name);
-                            }
+                            (Enabled(element, file, name) ? enabled : disabled).Add(name);
                             break;
                         case "custom":
                             var custom = Custom(element, name, file);
@@ -246,7 +248,7 @@ public static class RecognizerFileReader
                     throw Invalid(file, $"has an unknown element <{element.Name.LocalName}>");
             }
         }
-        return new RecognizerFile(feed, language, threshold, disabled, recognizers, allowList ?? AllowList.Empty, anonymizers);
+        return new RecognizerFile(feed, language, threshold, disabled, recognizers, allowList ?? AllowList.Empty, anonymizers, enabled);
     }
 
     /// <summary>

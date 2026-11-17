@@ -92,7 +92,7 @@ public static class DetectionLog
     {
         ReviewReason.NothingDetected => "add a recognizer if this is personal data, or an allow-list item if it is not",
         ReviewReason.BelowThreshold => "add context words or raise the pattern score if this is personal data",
-        ReviewReason.NoAction => "add an <anonymizer> for " + e.Entity,
+        ReviewReason.NoAction => "add an <anonymizer> for " + (e.NoActionEntities.Length > 0 ? e.NoActionEntities : e.Entity),
         ReviewReason.SpacyGuess => "add an allow-list item if this is not personal data",
         ReviewReason.Overlap => "check which recognizer should win, and adjust a pattern score",
         ReviewReason.Cut => "use mask for this entity, or a shorter new_value",

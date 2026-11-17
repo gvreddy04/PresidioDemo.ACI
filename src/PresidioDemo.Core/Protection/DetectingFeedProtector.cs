@@ -87,8 +87,9 @@ public enum ReviewReason
 /// <param name="Operator">The operators applied, joined with <c>+</c>, or empty.</param>
 /// <param name="Reasons">Why the string is listed for review, or <see cref="ReviewReason.None"/>.</param>
 /// <param name="Threshold">The feed's score threshold, so a review line can compare a weak score with it.</param>
+/// <param name="NoActionEntities">The detected entities without an anonymizer of their own, joined with <c>+</c>, or empty.</param>
 public sealed record DetectionEvent(int Slot, int Length, string Shape, string Recognizer, string Entity, double Score, DetectionDecision Decision,
-    int? Offset = null, string Operator = "", ReviewReason Reasons = ReviewReason.None, double Threshold = 0);
+    int? Offset = null, string Operator = "", ReviewReason Reasons = ReviewReason.None, double Threshold = 0, string NoActionEntities = "");
 
 /// <summary>
 /// The protected values for every parsed field, and one detection event per decoded string.
@@ -142,9 +143,11 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
             {
                 PythonHost.Call("configure_feed", file.ToBridgeJson());
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                throw new InvalidDataException($"Local Presidio could not load the {FeedCatalog.Get(file.Feed).FolderName} recognizers.");
+                // The reason comes from the configuration only (a recognizer name or a pattern Presidio rejects), never from
+                // message data, so it is safe to show.
+                throw new InvalidDataException($"Local Presidio could not load the {FeedCatalog.Get(file.Feed).FolderName} recognizers: {Reason(ex)}");
             }
         }
     }
@@ -207,7 +210,8 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
             values[field.Id] = value;
             events[slot] = Event(file, slot, field, Names(applied.Select(a => a.Span.Recognizer)), Names(applied.Select(a => a.Span.Entity)),
                 applied.Max(a => a.Span.Score), value == field.Value ? DetectionDecision.Kept : DetectionDecision.Changed,
-                Names(applied.Select(a => Operator(a.Action.Operator))), reasons);
+                Names(applied.Select(a => Operator(a.Action.Operator))), reasons,
+                Names(applied.Where(a => !a.Own).Select(a => a.Span.Entity)));
         }
 
         var detected = events.ToArray();
@@ -238,11 +242,12 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
 
     /// <summary>
     /// Applies the configured actions to the detected spans of one string. Overlaps are resolved by score, then length,
-    /// then position: each character belongs to the first span that claims it, and a span keeps the characters no
-    /// higher-ranked span took; every contiguous run of a span's characters gets that span's action, fitted to its width.
+    /// then position: each character belongs to the first span that claims it. Each span's action runs on the span's
+    /// whole text, fitted to its width, and the span writes only the characters no higher-ranked span took, so options such
+    /// as <c>chars_to_mask</c> and <c>from_end</c> count from the span's own edges.
     /// </summary>
-    private static (string Value, IReadOnlyList<(Span Span, AnonymizerAction Action)> Applied, ReviewReason Reasons) Apply(RecognizerFile file, string value,
-        IReadOnlyList<Span> spans)
+    private static (string Value, IReadOnlyList<(Span Span, AnonymizerAction Action, bool Own)> Applied, ReviewReason Reasons) Apply(RecognizerFile file,
+        string value, IReadOnlyList<Span> spans)
     {
         var ranked = spans.OrderByDescending(s => s.Score).ThenByDescending(s => s.End - s.Start).ThenBy(s => s.Start)
             .ThenBy(s => s.Entity, StringComparer.Ordinal).ToArray();
@@ -265,29 +270,28 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
         }
 
         var result = value.ToCharArray();
-        var applied = new List<(Span Span, AnonymizerAction Action)>();
-        for (int start = 0; start < value.Length;)
+        var applied = new List<(Span Span, AnonymizerAction Action, bool Own)>();
+        for (int rank = 0; rank < ranked.Length; rank++)
         {
-            int rank = owner[start];
-            int end = start + 1;
-            while (end < value.Length && owner[end] == rank)
+            var span = ranked[rank];
+            if (!Enumerable.Range(span.Start, span.End - span.Start).Any(c => owner[c] == rank))
             {
-                end++;
+                continue;
             }
-            if (rank >= 0)
+            var (action, own) = file.ActionFor(span.Entity);
+            var fitted = FeedAnonymizer.Apply(action, span.Entity, value[span.Start..span.End]);
+            for (int c = span.Start; c < span.End; c++)
             {
-                var span = ranked[rank];
-                var (action, own) = file.ActionFor(span.Entity);
-                var fitted = FeedAnonymizer.Apply(action, span.Entity, value[start..end]);
-                fitted.Text.CopyTo(0, result, start, end - start);
-                reasons |= (own ? ReviewReason.None : ReviewReason.NoAction) | (fitted.Cut ? ReviewReason.Cut : ReviewReason.None)
-                    | (span.Recognizer == SpacyRecognizer ? ReviewReason.SpacyGuess : ReviewReason.None);
-                if (!applied.Any(a => a.Span == span))
+                if (owner[c] == rank)
                 {
-                    applied.Add((span, action));
+                    result[c] = fitted.Text[c - span.Start];
                 }
             }
-            start = end;
+            // A hash is longer than almost any value by design, so its truncation to width is not a review reason (WR-015).
+            bool cut = fitted.Cut && action.Operator != AnonymizerOperator.Hash;
+            reasons |= (own ? ReviewReason.None : ReviewReason.NoAction) | (cut ? ReviewReason.Cut : ReviewReason.None)
+                | (span.Recognizer == SpacyRecognizer ? ReviewReason.SpacyGuess : ReviewReason.None);
+            applied.Add((span, action, own));
         }
         return (new string(result), applied, reasons);
     }
@@ -301,24 +305,24 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
         {
             return [];
         }
-        string json;
+        Span[][] result;
         await EngineGate.WaitAsync(cancellationToken);
         try
         {
-            json = PythonHost.Call("analyze_strings", FeedCatalog.Get(feed).FolderName, JsonSerializer.Serialize(texts));
+            string json = PythonHost.Call("analyze_strings", FeedCatalog.Get(feed).FolderName, JsonSerializer.Serialize(texts));
+            using var document = JsonDocument.Parse(json);
+            result = document.RootElement.EnumerateArray().Select(found => found.EnumerateArray().Select(span => new Span(
+                span[0].GetInt32(), span[1].GetInt32(), span[2].GetString() ?? "", span[3].GetDouble(), span[4].GetString() ?? "")).ToArray()).ToArray();
         }
         catch (Exception)
         {
+            // A bridge failure, a timeout or malformed bridge output: no output is published.
             throw new InvalidDataException("Local Presidio detection failed; input retained and no output was published.");
         }
         finally
         {
             EngineGate.Release();
         }
-
-        using var document = JsonDocument.Parse(json);
-        var result = document.RootElement.EnumerateArray().Select(found => found.EnumerateArray().Select(span => new Span(
-            span[0].GetInt32(), span[1].GetInt32(), span[2].GetString() ?? "", span[3].GetDouble(), span[4].GetString() ?? "")).ToArray()).ToArray();
         if (result.Length != texts.Count || result.Zip(texts).Any(pair => pair.First.Any(s => s.Start < 0 || s.End > pair.Second.Length || s.Start >= s.End)))
         {
             throw new InvalidDataException("Local Presidio returned spans that do not fit the message; no output was published.");
@@ -330,9 +334,20 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
     /// Creates a value-free event.
     /// </summary>
     private static DetectionEvent Event(RecognizerFile file, int slot, FeedField field, string recognizer, string entity, double score, DetectionDecision decision,
-        string op = "", ReviewReason reasons = ReviewReason.None) =>
+        string op = "", ReviewReason reasons = ReviewReason.None, string noActionEntities = "") =>
         new(slot, field.Value.Length, Shape(field.Value), recognizer, entity, Math.Round(score, 2, MidpointRounding.AwayFromZero), decision, field.Offset, op, reasons,
-            file.Threshold);
+            file.Threshold, noActionEntities);
+
+    /// <summary>
+    /// Returns the last line of a bridge error (the Python exception's own message), at most 200 characters, ending with a
+    /// full stop.
+    /// </summary>
+    private static string Reason(Exception ex)
+    {
+        string line = ex.Message.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
+        line = line.Length > 200 ? line[..200] : line;
+        return line.Length == 0 ? "unknown error." : line.TrimEnd('.') + ".";
+    }
 
     /// <summary>
     /// Joins distinct names in ordinal order with <c>+</c>.

@@ -211,12 +211,70 @@ internal static class DetectingProtectorChecks
             var fallback = await ProtectStringsAsync(Configured(withDefault), "alex@example.com");
             Check(fallback[0] == "****************", "an entity without its own anonymizer uses DEFAULT");
             Console.WriteLine("PASS an emptied file runs Presidio's defaults; switches and anonymizers change the output with no code change");
+
+            // Review reasons as the protector produces them (made-up strings).
+            var guess = await ProtectOutcomeAsync(Configured(withDefault), "Contact Alex Sample", "alex@example.com", "LI WU");
+            Check(guess.Events[0].Reasons.HasFlag(ReviewReason.SpacyGuess) && !guess.Events[0].Reasons.HasFlag(ReviewReason.NoAction),
+                "a spaCy PERSON with its own anonymizer is a spacy-guess, not a no-action");
+            Check(guess.Events[1].Reasons.HasFlag(ReviewReason.NoAction) && guess.Events[1].NoActionEntities.Contains("EMAIL_ADDRESS", StringComparison.Ordinal),
+                "an entity that used DEFAULT is a no-action naming that entity");
+            var mixed = await ProtectOutcomeAsync(Configured(noCards), "Contact Alex Sample at alex@example.com");
+            Check(mixed.Events[0].NoActionEntities.Contains("EMAIL_ADDRESS", StringComparison.Ordinal) && !mixed.Events[0].NoActionEntities.Contains("PERSON", StringComparison.Ordinal),
+                "the no-action fix names only the entities without their own anonymizer");
+            var cut = await ProtectOutcomeAsync(Configured(empty), "LI WU");
+            Check(cut.Values["0"] == "<PERS" && cut.Events[0].Reasons.HasFlag(ReviewReason.Cut), "a replace result longer than the value is cut and listed as cut");
         }
         finally
         {
             File.Delete(empty);
             File.Delete(noCards);
             File.Delete(withDefault);
+            protector.Configure();
+        }
+
+        // Overlaps, keep and hash with custom recognizers (made-up codes): CODE_A covers AB1234 at 0.9 and CODE_B covers
+        // 1234CD at 0.7, so CODE_A wins the shared 1234 and CODE_B keeps CD. chars_to_mask counts from CODE_B's own start,
+        // so masking its first two characters changes only what CODE_A already took. spaCy is switched off, because it reads
+        // a made-up code such as AB1234CD as a PERSON and would win the whole string.
+        string Codes(string actionA, string actionB) => Temporary("<recognizers feed=\"PNR\">"
+            + "<recognizer name=\"CryptoRecognizer\" type=\"predefined\" enabled=\"true\" />"
+            + "<recognizer name=\"SpacyRecognizer\" type=\"predefined\" enabled=\"false\" />"
+            + "<recognizer name=\"codeA\" type=\"custom\" supported_entity=\"CODE_A\"><pattern name=\"a\" score=\"0.9\">AB\\d{4}</pattern></recognizer>"
+            + "<recognizer name=\"codeB\" type=\"custom\" supported_entity=\"CODE_B\"><pattern name=\"b\" score=\"0.7\">\\d{4}CD</pattern></recognizer>"
+            + "<anonymizer entity=\"CODE_A\" " + actionA + " /><anonymizer entity=\"CODE_B\" " + actionB + " /><anonymizer entity=\"DEFAULT\" type=\"mask\" /></recognizers>");
+        string overlap = Codes("type=\"mask\"", "type=\"mask\" masking_char=\"#\"");
+        string partial = Codes("type=\"mask\"", "type=\"mask\" masking_char=\"#\" chars_to_mask=\"2\"");
+        string keepFile = Codes("type=\"keep\"", "type=\"mask\"");
+        string hashed = Codes("type=\"hash\" salt=\"demo\"", "type=\"mask\"");
+        string typo = Temporary("<recognizers feed=\"PNR\"><recognizer name=\"CreditCardRecogniser\" type=\"predefined\" /></recognizers>");
+        try
+        {
+            var both = await ProtectOutcomeAsync(Configured(overlap), "AB1234CD");
+            Check(both.Values["0"] == "******##" && both.Events[0].Reasons.HasFlag(ReviewReason.Overlap), $"the higher score wins an overlap; the loser masks its own characters (got {both.Values["0"]}, {both.Events[0].Recognizer}, {both.Events[0].Entity}, {both.Events[0].Reasons})");
+            var counted = await ProtectOutcomeAsync(Configured(partial), "AB1234CD");
+            Check(counted.Values["0"] == "******CD", "chars_to_mask counts from the losing span's own start");
+            var keep = await ProtectOutcomeAsync(Configured(keepFile), "AB1234");
+            Check(keep.Values["0"] == "AB1234" && keep.Events[0].Decision == DetectionDecision.Kept && keep.Events[0].Reasons == ReviewReason.None,
+                "the keep operator publishes a detected value unchanged as kept, not for review");
+            var hash = await ProtectOutcomeAsync(Configured(hashed), "AB1234");
+            Check(hash.Values["0"].Length == 6 && hash.Values["0"] != "AB1234" && !hash.Events[0].Reasons.HasFlag(ReviewReason.Cut),
+                "a hash cut to width is not listed as cut");
+            try
+            {
+                Configured(typo);
+                throw new Exception("an unknown predefined recognizer name must stop startup");
+            }
+            catch (InvalidDataException ex) when (ex.Message.Contains("CreditCardRecogniser", StringComparison.Ordinal))
+            {
+            }
+            Console.WriteLine("PASS overlaps, chars_to_mask, keep and hash behave per span; an unknown predefined name stops startup and is named");
+        }
+        finally
+        {
+            foreach (string file in new[] { overlap, partial, keepFile, hashed, typo })
+            {
+                File.Delete(file);
+            }
             protector.Configure();
         }
 
@@ -303,10 +361,16 @@ internal static class DetectingProtectorChecks
     /// </summary>
     private static async Task<string[]> ProtectStringsAsync(DetectingFeedProtector protector, params string[] values)
     {
-        var parsed = new ParsedFeed(values.Select((value, i) => new FeedField(i.ToString(System.Globalization.CultureInfo.InvariantCulture), "slot" + i, value)).ToArray(), new object());
-        var outcome = await protector.ProtectAsync(FeedType.PNR, parsed, CancellationToken.None);
-        return parsed.Fields.Select(f => outcome.Values[f.Id]).ToArray();
+        var outcome = await ProtectOutcomeAsync(protector, values);
+        return Enumerable.Range(0, values.Length).Select(i => outcome.Values[i.ToString(System.Globalization.CultureInfo.InvariantCulture)]).ToArray();
     }
+
+    /// <summary>
+    /// Protects made-up strings as one parsed message; field identifiers are the slot numbers.
+    /// </summary>
+    private static ValueTask<DetectionOutcome> ProtectOutcomeAsync(DetectingFeedProtector protector, params string[] values) =>
+        protector.ProtectAsync(FeedType.PNR, new ParsedFeed(values.Select((value, i) =>
+            new FeedField(i.ToString(System.Globalization.CultureInfo.InvariantCulture), "slot" + i, value)).ToArray(), new object()), CancellationToken.None);
 
     /// <summary>
     /// Counts baseline values of one binary feed that the protector publishes unchanged and that are not approved

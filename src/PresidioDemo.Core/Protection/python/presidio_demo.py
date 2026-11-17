@@ -53,7 +53,7 @@ def configure_feed(config_json):
     registry = RecognizerRegistry(supported_languages=[language])
     registry.load_predefined_recognizers(languages=[language], nlp_engine=nlp_engine)
     disabled = set(config["disabled"])
-    unknown = disabled - {r.name for r in registry.recognizers}
+    unknown = (disabled | set(config.get("enabled", []))) - {r.name for r in registry.recognizers}
     if unknown:
         raise ValueError("Unknown predefined recognizer: " + ", ".join(sorted(unknown)))
     registry.recognizers = [r for r in registry.recognizers if r.name not in disabled]
