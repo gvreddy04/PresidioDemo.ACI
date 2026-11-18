@@ -122,7 +122,7 @@ text{font-family:'Segoe UI',Arial,sans-serif;fill:#2C2C2A}
 <text class="t" x="1332" y="172">ACI (PII clean)</text>
 <text class="m" x="1304" y="194">Output queue</text>
 <text class="d" x="1304" y="218">Locator K7QX2M unchanged</text>
-<text class="d" x="1304" y="238">Name, loyalty, prefix masked</text></g>
+<text class="d" x="1304" y="238">Passenger name masked</text></g>
 <g class="st"><rect x="1290" y="320" width="280" height="70" rx="8" style="stroke:#534AB7"/>
 <text class="t" x="1430" y="350" text-anchor="middle">Partner core system</text>
 <text class="m" x="1430" y="372" text-anchor="middle">Consumes the masked ACI message</text></g>

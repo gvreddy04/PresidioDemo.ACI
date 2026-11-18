@@ -1,6 +1,6 @@
 # ACI feed sample review and structure
 
-> **Superseded design.** This review describes the per-feed parsers, field policies and the three XML files (`feed-policies.xml`, `xdr-layouts.xml`, `reference-layouts.xml`) that decoded-text detection replaced. Those files and parsers are removed. Protection now uses the generic decoder and the ACI recognizer file; see [Decoded-text detection](../README.md#decoded-text-detection). The sample review, the structure findings and the field meanings below stay valid as analysis; the configuration notes refer to the removed design. The protection results they produced are frozen, value-free, in [tests/fixtures/parity-baseline.json](../tests/fixtures/parity-baseline.json).
+> **Superseded design.** This review describes the per-feed parsers, field policies and the three XML files (`feed-policies.xml`, `xdr-layouts.xml`, `reference-layouts.xml`) that decoded-text detection replaced. Those files and parsers are removed. Protection now uses the generic decoder and the ACI recognizer file, which keeps passenger names only (`passengerName`); Presidio's predefined recognizers run too only with `Presidio:DefaultDetection` on, which is off by default. The other fields described below are published as received; see [Decoded-text detection](../README.md#decoded-text-detection). The sample review, the structure findings and the field meanings below stay valid as analysis; the configuration notes refer to the removed design. The protection results they produced are frozen, value-free, in [tests/fixtures/parity-baseline.json](../tests/fixtures/parity-baseline.json).
 >
 > This repository keeps the ACI feed only. The review of the other feeds, and the configuration examples of the removed design, are in the history of the earlier multi-feed repository at commit `dffbdad`.
 
@@ -45,7 +45,7 @@ Counts below describe populated binary text/capture fields under the removed fie
 | ACI_05.txt | 832 | 18 | 1 Mask |
 | ACI_06.txt | 960 | 19 | 5 Mask |
 
-With decoded-text detection, all six samples are published through the real worker and local Presidio. Of the 15 values the former field policies protected, 10 are protected and 5 are approved exceptions: 2 strings of one to three characters (WR-015) and 3 eleven-character references in which nothing is detected. The record locator inside the unresolved record reference stays unchanged; the standalone record locator is masked by a spaCy guess in five of the six samples. Source hashes, payload sizes, raw words, string counts, zero padding, MQ headers, row framing and newline style are preserved.
+With decoded-text detection, all six samples are published through the real worker and local Presidio, with `Presidio:DefaultDetection` off. The parity check is names-only: of the 15 values the former field policies protected, the 6 names are in scope and all 6 are protected; the other 9 values (loyalty numbers and record references) are out of scope and published as received. The record locators, standalone or inside the unresolved record reference, stay unchanged. Source hashes, payload sizes, raw words, string counts, zero padding, MQ headers, row framing and newline style are preserved.
 
 ## Configuration behavior (removed design)
 
