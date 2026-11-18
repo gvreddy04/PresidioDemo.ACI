@@ -18,7 +18,7 @@ public static class FeedCodecRegistry
     /// <returns>The codec.</returns>
     public static IFeedCodec Create(FeedType feed) => feed switch
     {
-        FeedType.PNR => new PnrDecoder(),
+        FeedType.ACI => new AciDecoder(),
         _ => throw new InvalidDataException("No codec is registered for this feed.")
     };
 
