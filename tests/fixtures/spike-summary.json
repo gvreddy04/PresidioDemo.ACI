@@ -21,16 +21,16 @@
   "throughput": {
     "rounds": 20,
     "messages": 120,
-    "nlpNer": "not acted on (Presidio:DefaultDetection false); spaCy en_core_web_lg still processes each analyzed string for context words",
-    "messagesPerSecondPerTask": 156,
+    "nlpNer": "off (Presidio:DefaultDetection false); spaCy does not run (no context words)",
+    "messagesPerSecondPerTask": 1678.8,
     "feeds": [
       {
         "feed": "ACI",
-        "messagesPerSecondPerTask": 156.2,
-        "tasks": 3
+        "messagesPerSecondPerTask": 1696.6,
+        "tasks": 1
       }
     ],
-    "tasksForPeak": 3,
+    "tasksForPeak": 1,
     "assumption": "400 msg/s peak for the ACI feed; one worker process per ECS task"
   },
   "rejected": []
