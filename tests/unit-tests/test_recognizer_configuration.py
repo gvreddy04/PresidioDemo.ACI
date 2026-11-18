@@ -10,7 +10,7 @@ import regex
 PROJECT = Path(__file__).resolve().parents[2]
 RECOGNIZERS = PROJECT / "src" / "PresidioDemo.Core" / "Configuration" / "recognizers"
 SPIKE = PROJECT / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
-FILES = ["pnr.xml"]
+FILES = ["aci.xml"]
 # Presidio's PatternRecognizer compiles with these flags.
 FLAGS = regex.DOTALL | regex.MULTILINE | regex.IGNORECASE
 # Long inputs that make badly nested quantifiers backtrack.
@@ -19,7 +19,7 @@ ADVERSARIAL = [
     "9" * 10_000,
     ("AB/" * 3_400)[:10_000],
     ("A " * 5_000),
-    ("DOCSXXHK1/" + "/" * 9_990),
+    ("123456789" + "K7QX2M" * 1_665)[:10_000],
     ("X" * 9_996) + "!!!!",
     ("A-" * 5_000),
 ]

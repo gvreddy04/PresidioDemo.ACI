@@ -18,11 +18,11 @@ public static class RecognizerFileChecks
     /// </summary>
     private const string Valid = """
         <?xml version="1.0" encoding="utf-8"?>
-        <recognizers feed="PNR" language="en" default_score_threshold="0.6">
+        <recognizers feed="ACI" language="en" default_score_threshold="0.6">
           <recognizer name="CryptoRecognizer" type="predefined" enabled="false" />
           <recognizer name="passengerName" type="custom" supported_entity="PERSON">
             <pattern name="surname/given" score="0.9">(?&lt;![A-Z])[A-Z]{2,}/[A-Z]+</pattern>
-            <context>DOCS NAME</context>
+            <context>PAX NAME</context>
           </recognizer>
           <recognizer name="titles" type="custom" supported_entity="TITLE" deny_list_score="0.8">
             <deny_list>MR MRS DR</deny_list>
@@ -32,7 +32,7 @@ public static class RecognizerFileChecks
           </recognizer>
           <allow_list match="regex">
             <item>\d{4}</item>
-            <item>FQT[RS]</item>
+            <item>UNKNOWN?</item>
           </allow_list>
           <anonymizer entity="PERSON" type="mask" masking_char="*" />
           <anonymizer entity="TITLE" type="replace" new_value="[T]" />
@@ -60,31 +60,31 @@ public static class RecognizerFileChecks
             Check(file.Disabled.SequenceEqual(["CryptoRecognizer"]), "a predefined recognizer with enabled=\"false\" is switched off", ref passed);
             Check(file.Recognizers.Select(r => r.Name).SequenceEqual(["passengerName", "titles"]), "custom recognizers load; a disabled one is left out", ref passed);
             var name = file.Recognizers[0];
-            Check(name.Entity == "PERSON" && name.Patterns.Single() is { Name: "surname/given", Score: 0.9 } && name.Context.SequenceEqual(["DOCS", "NAME"]),
+            Check(name.Entity == "PERSON" && name.Patterns.Single() is { Name: "surname/given", Score: 0.9 } && name.Context.SequenceEqual(["PAX", "NAME"]),
                 "a pattern keeps its name and score, context words are split on spaces", ref passed);
             Check(file.Recognizers[1].DenyList.SequenceEqual(["MR", "MRS", "DR"]) && file.Recognizers[1].DenyListScore == 0.8, "a deny list and its score load", ref passed);
-            Check(file.AllowList.MatchesWhole("1405") && file.AllowList.MatchesWhole("fqtr") && !file.AllowList.MatchesWhole("XXXX1111")
-                && !file.AllowList.MatchesWhole("APPR 1234 OK"), "allow-list items match whole strings only", ref passed);
+            Check(file.AllowList.MatchesWhole("1405") && file.AllowList.MatchesWhole("unknow") && !file.AllowList.MatchesWhole("XXXX1111")
+                && !file.AllowList.MatchesWhole("GATE 1234 OPEN"), "allow-list items match whole strings only", ref passed);
             Check(file.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Mask, MaskingChar: '*' }, true)
                 && file.ActionFor("CREDIT_CARD") is ({ Operator: AnonymizerOperator.Mask, MaskingChar: '#' }, false),
                 "an entity uses its own anonymizer, else DEFAULT", ref passed);
-            var bare = Load(scratch, "<recognizers feed=\"PNR\" />");
+            var bare = Load(scratch, "<recognizers feed=\"ACI\" />");
             Check(bare.Disabled.Count == 0 && bare.Recognizers.Count == 0 && bare.Threshold == 0.5 && !bare.AllowList.MatchesWhole("1405")
                 && bare.ActionFor("PERSON") is ({ Operator: AnonymizerOperator.Replace }, false), "an empty file loads with Presidio's defaults and replace", ref passed);
-            Check(Load(scratch, "<recognizers feed=\"PNR\"><allow_list><item>FQTR</item></allow_list></recognizers>").AllowList is { Regex: false } exact
-                && exact.MatchesWhole("FQTR") && !exact.MatchesWhole("fqtr"), "an exact allow list compares the whole text exactly", ref passed);
+            Check(Load(scratch, "<recognizers feed=\"ACI\"><allow_list><item>UNKNOWN</item></allow_list></recognizers>").AllowList is { Regex: false } exact
+                && exact.MatchesWhole("UNKNOWN") && !exact.MatchesWhole("unknown"), "an exact allow list compares the whole text exactly", ref passed);
             Check(file.ToBridgeJson().Contains("\"disabled\":[\"CryptoRecognizer\"]", StringComparison.Ordinal)
                 && file.ToBridgeJson().Contains("\"denyList\":[\"MR\",\"MRS\",\"DR\"]", StringComparison.Ordinal), "the bridge JSON carries switches and deny lists", ref passed);
 
-            Reject(scratch, "<recognizers feed=\"PNR\"", "not well-formed XML", ref passed);
-            Reject(scratch, "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"y\">]><recognizers feed=\"PNR\" />", "a DTD", ref passed);
-            Reject(scratch, Valid.Replace("feed=\"PNR\"", "feed=\"OTHER\""), "the wrong feed attribute", ref passed);
+            Reject(scratch, "<recognizers feed=\"ACI\"", "not well-formed XML", ref passed);
+            Reject(scratch, "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"y\">]><recognizers feed=\"ACI\" />", "a DTD", ref passed);
+            Reject(scratch, Valid.Replace("feed=\"ACI\"", "feed=\"OTHER\""), "the wrong feed attribute", ref passed);
             Reject(scratch, Valid.Replace("language=\"en\"", "language=\"de\""), "a language other than en", ref passed);
             Reject(scratch, Valid.Replace("0.6", "1.5"), "a threshold above 1", ref passed);
             Reject(scratch, Valid.Replace("ORD\\d+", "(unclosed"), "a pattern that does not compile", ref passed);
             Reject(scratch, Valid.Replace("\\d{4}", "(unclosed"), "an allow-list item that does not compile", ref passed);
             // An unbalanced ")" is invalid alone but valid inside the whole-string wrapper, where it would match every string.
-            Reject(scratch, Valid.Replace("<item>FQT[RS]</item>", "<item>FQTR)|(?:.*</item>"), "an allow-list item that escapes its anchor", ref passed, "does not compile");
+            Reject(scratch, Valid.Replace("<item>UNKNOWN?</item>", "<item>UNKNOWN)|(?:.*</item>"), "an allow-list item that escapes its anchor", ref passed, "does not compile");
             Reject(scratch, Valid.Replace("ORD\\d+", "ORD)|(?:.*"), "a pattern that escapes its anchor", ref passed, "does not compile");
             Reject(scratch, Valid.Replace("name=\"titles\"", "name=\"passengerName\""), "a duplicate recognizer name", ref passed);
             Reject(scratch, Valid.Replace("type=\"predefined\"", "type=\"builtin\""), "an unknown recognizer type", ref passed);
@@ -98,7 +98,7 @@ public static class RecognizerFileChecks
             Reject(scratch, Valid.Replace("entity=\"TITLE\"", "entity=\"PERSON\""), "two anonymizers for one entity", ref passed);
             Reject(scratch, Valid.Replace("<allow_list match=\"regex\">", "<allow_list match=\"glob\">"), "an unknown allow-list match", ref passed);
             Reject(scratch, Valid.Replace("</recognizers>", "<allow_list><item>X</item></allow_list></recognizers>"), "a second allow list", ref passed);
-            Reject(scratch, Valid.Replace("<context>DOCS NAME</context>", "<context>DOCS</context><rule />"), "an unknown child element", ref passed);
+            Reject(scratch, Valid.Replace("<context>PAX NAME</context>", "<context>PAX</context><rule />"), "an unknown child element", ref passed);
             Reject(scratch, Valid.Replace("</recognizers>", "<rule /></recognizers>"), "an unknown element", ref passed);
             Reject(scratch, Valid.Replace("type=\"predefined\"", "type=\"predefined\" colour=\"red\""), "an unknown attribute", ref passed);
             // Elements and attributes of the earlier format fail loudly instead of being ignored.
@@ -116,13 +116,13 @@ public static class RecognizerFileChecks
     }
 
     /// <summary>
-    /// Writes the content as <c>pnr.xml</c> and reads it.
+    /// Writes the content as <c>aci.xml</c> and reads it.
     /// </summary>
     private static RecognizerFile Load(string scratch, string content)
     {
-        string path = Path.Combine(scratch, "pnr.xml");
+        string path = Path.Combine(scratch, "aci.xml");
         File.WriteAllText(path, content);
-        return RecognizerFileReader.Read(path, FeedType.PNR);
+        return RecognizerFileReader.Read(path, FeedType.ACI);
     }
 
     /// <summary>
@@ -134,7 +134,7 @@ public static class RecognizerFileChecks
         {
             Load(scratch, content);
         }
-        catch (InvalidDataException ex) when (ex.Message.StartsWith("Recognizer file pnr.xml", StringComparison.Ordinal)
+        catch (InvalidDataException ex) when (ex.Message.StartsWith("Recognizer file aci.xml", StringComparison.Ordinal)
             && (phrase is null || ex.Message.Contains(phrase, StringComparison.Ordinal)))
         {
             Console.WriteLine("PASS rejected " + label + " (" + ex.Message + ")");

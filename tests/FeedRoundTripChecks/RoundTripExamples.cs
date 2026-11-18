@@ -80,11 +80,11 @@ internal static class RoundTripExamples
             examples.Add(new(feed, feed + "/diagnostic-dump", baseline.Sample, "Complete diagnostic dump", ".txt",
                 Diagnostic(baseline.Envelope.Payload)));
 
-            // The generic codec has no field names, so the varied string is chosen by its shape: the first letters-only
-            // string (the PNR surname).
+            // The generic codec has no field names, so the varied string is chosen by its shape: the first passenger name
+            // (SURNAME/GIVEN, letters and one slash).
             var parsed = codecFactory(feed).Parse(Message(feed, "example.bin", baseline.Envelope.Payload));
-            string current = parsed.Fields.First(field => field.Value.Length >= 4 && field.Value.All(char.IsAsciiLetterUpper)).Value;
-            foreach (string replacement in new[] { "", "REED", "STONE", "CARTER", "FOX", "WASHINGTON" })
+            string current = parsed.Fields.First(field => field.Value.Contains('/') && field.Value.All(c => char.IsAsciiLetterUpper(c) || c == '/')).Value;
+            foreach (string replacement in new[] { "", "REED/AVA", "COLE/JACK", "FOX/OLIVIA", "CARTER/EMMA", "BROOKS/MICHAEL" })
             {
                 // Build fixtures independently, rather than use the serializer under test.
                 byte[] payload = ReplaceCountedString(baseline.Envelope.Payload, current, replacement);

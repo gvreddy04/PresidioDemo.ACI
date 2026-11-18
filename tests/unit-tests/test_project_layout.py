@@ -34,13 +34,13 @@ class ProjectLayoutTests(unittest.TestCase):
     def test_per_feed_parsers_and_policy_xml_are_removed(self):
         core = PROJECT / "src/PresidioDemo.Core"
         for area in ("Parser", "Serializer", "Decoder", "Models", "Reporting"):
-            self.assertFalse((core / area / "PNR").exists(), f"{area}/PNR")
+            self.assertFalse((core / area / "ACI").exists(), f"{area}/ACI")
         for name in ("feed-policies.xml", "xdr-layouts.xml", "reference-layouts.xml"):
             self.assertFalse((core / "Configuration" / name).exists(), name)
         for name in ("XdrFeedCodec.cs", "ReferenceLayoutFeedCodec.cs"):
             self.assertFalse((core / "Parser/Shared" / name).exists(), name)
         recognizers = {p.name for p in (core / "Configuration/recognizers").glob("*.xml")}
-        self.assertEqual(recognizers, {"pnr.xml"})
+        self.assertEqual(recognizers, {"aci.xml"})
 
     def test_core_concern_folders_are_flat(self):
         # CR-002: one folder per concern holding a base and its per-feed children; no Parser, Serializer, feed or Shared folders.
@@ -51,12 +51,12 @@ class ProjectLayoutTests(unittest.TestCase):
             self.assertEqual([p.name for p in (core / concern).iterdir() if p.is_dir()], [], concern)
         self.assertEqual([p.name for p in (core / "Protection").iterdir() if p.is_dir()], ["python"])
 
-    def test_the_pnr_feed_has_one_class_per_concern_over_its_base(self):
+    def test_the_aci_feed_has_one_class_per_concern_over_its_base(self):
         core = PROJECT / "src/PresidioDemo.Core"
         expected = {
-            "Decoder": {"PnrDecoder": "XdrFeedDecoder(FeedType.PNR)"},
-            "Pipeline": {"PnrWorkflow": "ProtectedFeedWorkflow(protector, codec)"},
-            "Logging": {"PnrFeedLogger": ": FeedLogger"},
+            "Decoder": {"AciDecoder": "XdrFeedDecoder(FeedType.ACI)"},
+            "Pipeline": {"AciWorkflow": "ProtectedFeedWorkflow(protector, codec)"},
+            "Logging": {"AciFeedLogger": ": FeedLogger"},
         }
         for concern, classes in expected.items():
             for name, base in classes.items():
@@ -65,19 +65,19 @@ class ProjectLayoutTests(unittest.TestCase):
                 self.assertIn(base, text, name)
         for base in ("Decoder/XdrFeedDecoder.cs", "Pipeline/ProtectedFeedWorkflow.cs", "Logging/FeedLogger.cs"):
             self.assertIn("public abstract class", (core / base).read_text(encoding="utf-8"), base)
-        self.assertIn("PNR = 1", (core / "Models/FeedContracts.cs").read_text(encoding="utf-8"), "FeedType keeps PNR's value")
+        self.assertIn("ACI = 4", (core / "Models/FeedContracts.cs").read_text(encoding="utf-8"), "FeedType keeps ACI's value")
         protector = (core / "Protection/DetectingFeedProtector.cs").read_text(encoding="utf-8")
         for member in ("Changed = 0", "Kept = 1", "Allowed = 2", "NothingDetected = 3", "BelowThreshold = 4"):
             self.assertIn(member, protector, "DetectionDecision values are explicit (WR-014)")
 
-    def test_each_concern_folder_holds_only_the_pnr_feed_and_shared_files(self):
-        # PNR-Worker is PNR only (26111201): any other feed's class in these folders fails this check.
+    def test_each_concern_folder_holds_only_the_aci_feed_and_shared_files(self):
+        # The ACI worker is ACI only: any other feed's class in these folders fails this check.
         core = PROJECT / "src/PresidioDemo.Core"
         expected = {
-            "Decoder": {"XdrFeedDecoder.cs", "PnrDecoder.cs", "XdrTextScanner.cs"},
-            "Pipeline": {"ProtectedFeedWorkflow.cs", "PnrWorkflow.cs", "FeedWorkflowRouter.cs", "FeedCodecRegistry.cs",
+            "Decoder": {"XdrFeedDecoder.cs", "AciDecoder.cs", "XdrTextScanner.cs"},
+            "Pipeline": {"ProtectedFeedWorkflow.cs", "AciWorkflow.cs", "FeedWorkflowRouter.cs", "FeedCodecRegistry.cs",
                          "FeedMessageProcessor.cs", "FeedPipelineConfiguration.cs"},
-            "Logging": {"FeedLogger.cs", "PnrFeedLogger.cs", "FeedLoggers.cs", "FeedTransactionLog.cs", "DetectionLog.cs"},
+            "Logging": {"FeedLogger.cs", "AciFeedLogger.cs", "FeedLoggers.cs", "FeedTransactionLog.cs", "DetectionLog.cs"},
         }
         for concern, files in expected.items():
             self.assertEqual({p.name for p in (core / concern).glob("*.cs")}, files, concern)
@@ -105,8 +105,12 @@ class ProjectLayoutTests(unittest.TestCase):
 
     def test_samples_are_finalized_txt_files_in_one_folder_per_feed_with_unchanged_bytes(self):
         expected = {
-            "PNR/PNR.txt": "75cc60895384395f8df28eff4c4abf6a0c58f1dc7960c5eee41cb294def0e4de",
-            "PNR/PNR_02.txt": "99142486d0d1b4b463363057f2822365a3f9fa567d6f1116bc881ce1d9808157",
+            "ACI/ACI.txt": "f038c05e590ade818748f6547c2a624d8d662a52c54d3596ad93649eafce022d",
+            "ACI/ACI_02.txt": "bdfa61c1999cef2590a535ca6b0049fa30104b1a717537ef413a02480b3bd95c",
+            "ACI/ACI_03.txt": "aaacd2a473d3155ed8cc4bd44f9ce00b8494a52be516860561a5112774ab1042",
+            "ACI/ACI_04.txt": "3b5cee1e10a83f5da21c7fbce779f8e978a26c2c3aaf2a5ade18b40f136b73b5",
+            "ACI/ACI_05.txt": "71c8fde1c93e0bb6f1562d596e58ef8c3618a0a9ee0a72c12bbf42b2da2cecb2",
+            "ACI/ACI_06.txt": "9526c95f10f5e0dab53ce2bda1ae24e3cfffbfac0d2c65f15f0c5d5913ef0087",
         }
         samples = PROJECT / "docs" / "sample-docs"
         # Samples are grouped in one folder per feed route, named like the exchange folders.
