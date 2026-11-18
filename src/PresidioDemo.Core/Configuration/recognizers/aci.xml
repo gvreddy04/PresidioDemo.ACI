@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ACI recognizers in the Presidio-style format (WR-014): a flat list under <recognizers> that mirrors Presidio's
+  recognizer registry YAML, its analyze allow_list and its anonymizers map, using Presidio's names.
+  Each decoded string is decided on its own: a string that matches an <allow_list> item end to end is published
+  unchanged; otherwise every span detected at or above default_score_threshold gets its entity's <anonymizer>, else
+  DEFAULT, else Presidio's replace; a string in which nothing is detected is published unchanged and listed for review.
+  Every result keeps the string's width (WR-015). Values below are made up.
+-->
+<recognizers feed="ACI" language="en" default_score_threshold="0.5">
+
+  <!-- ===== Predefined recognizers (Presidio's own). All of them run unless switched off by class name, for example:
+       <recognizer name="CryptoRecognizer" type="predefined" enabled="false" />  ===== -->
+
+  <!-- ===== Custom pattern recognizers (Presidio type: custom). ===== -->
+
+  <!-- Example: MILLER/JORDAN -> *************, MILLER-SMITH/ANN MARIE -> **********************. Presidio's PERSON misses
+       this format. -->
+  <recognizer name="passengerName" type="custom" supported_entity="PERSON">
+    <pattern name="surname/given" score="0.9">(?&lt;![A-Z])[A-Z]{2,}(?:[ '-][A-Z]+)*/[A-Z]*(?:[ '-][A-Z]+)*</pattern>
+  </recognizer>
+
+  <!-- Example: DA12345678 -> **********. -->
+  <recognizer name="loyaltyNumber" type="custom" supported_entity="LOYALTY_NUMBER">
+    <pattern name="airline + digits" score="0.85">(?&lt;![A-Z0-9])[A-Z]{2}\d{6,12}(?!\d)</pattern>
+  </recognizer>
+
+  <!-- The unresolved record reference is a nine-digit prefix and a six-character record locator: only the prefix is
+       masked, the locator stays unchanged. The locator must hold a letter, so an all-digit number (such as a 15-digit
+       card number) is not a record reference. Example: 123456789K7QX2M -> *********K7QX2M. -->
+  <recognizer name="recordReferencePrefix" type="custom" supported_entity="UNCLASSIFIED_IDENTIFIER">
+    <pattern name="nine digits before a locator" score="0.85">^\d{9}(?=\S{0,5}[A-Z])(?=\S{6}$)</pattern>
+  </recognizer>
+
+  <!-- ===== Allow list: a decoded string that matches an item end to end is published unchanged. ===== -->
+  <!-- Examples: 20261109, 20261109 14.05.33.120, 14.05.33.120, 3412 (aircraft number), B12 or " C7" (gate),
+       UNKNOWN or the truncated UNKNOW (process name), **** (already masked upstream). -->
+  <allow_list match="regex">
+    <item>^\d{8}$</item>
+    <item>^\d{8} \d{2}\.\d{2}\.\d{2}\.\d{3}$</item>
+    <item>^\d{2}\.\d{2}\.\d{2}\.\d{3}$</item>
+    <item>^\d{4}$</item>
+    <item>^ ?[A-Z]\d{1,3}$</item>
+    <item>^UNKNOWN?$</item>
+    <item>^\*+$</item>
+  </allow_list>
+
+  <!-- ===== Anonymizers (Presidio anonymizers map): one action per entity. ===== -->
+  <!-- Allowed types: mask, replace, redact, hash, keep; every result is fitted to the width it replaces (WR-015). -->
+  <anonymizer entity="PERSON" type="mask" masking_char="*" />
+  <anonymizer entity="LOYALTY_NUMBER" type="mask" masking_char="*" />
+  <anonymizer entity="UNCLASSIFIED_IDENTIFIER" type="mask" masking_char="*" />
+  <!-- Every other entity, including Presidio's EMAIL_ADDRESS, CREDIT_CARD, IP_ADDRESS and LOCATION.
+       Without this line Presidio's default applies: replace with <ENTITY>. -->
+  <anonymizer entity="DEFAULT" type="mask" masking_char="*" />
+
+</recognizers>
