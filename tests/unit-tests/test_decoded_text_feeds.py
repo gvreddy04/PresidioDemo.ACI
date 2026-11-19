@@ -63,7 +63,7 @@ class DecodedTextFeedTests(unittest.TestCase):
             self.assertIn(reason, rejected[name])
 
     def test_published_samples_keep_framing_and_protect_every_baseline_name(self):
-        # Names-only: every PERSON baseline value is protected or approved; every other value is out of scope.
+        # Every baseline value in scope is protected or approved; the rest is out of scope.
         document, exceptions = baseline()
         totals = {"protected": 0, "approved_exceptions": 0, "out_of_scope": 0}
         for key, original in self.inputs.items():
@@ -86,8 +86,8 @@ class DecodedTextFeedTests(unittest.TestCase):
         document, exceptions = baseline()
         aci = payload((SAMPLES / "ACI" / "ACI.txt").read_bytes())
         published = payload(self.harness.published("ACI", "ACI.txt"))
-        # Names the unchanged sample protects must stay protected; short values, listed exceptions and values out of the
-        # names-only scope are not checked.
+        # Values in scope the unchanged sample protects must stay protected; short values, listed exceptions and values out of
+        # scope are not checked.
         values = [aci[int(e["location"]):int(e["location"]) + e["length"]] for e in document["protected"]
                   if in_scope(e) and e["sample"] == "ACI.txt" and e["length"] >= 4 and ("ACI.txt", e["location"]) not in exceptions]
         values = [v for v in values if v not in published]
