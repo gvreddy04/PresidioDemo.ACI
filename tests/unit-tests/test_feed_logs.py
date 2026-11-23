@@ -136,10 +136,10 @@ class DetectionLogTests(unittest.TestCase):
         self.assertNotIn(" DETECTION ", self.off)
         self.assertIn("SAMPLE ", self.off)
 
-    def test_with_default_detection_off_only_defined_recognizers_decide(self):
-        # Presidio:DefaultDetection is off in the shipped settings: the run says so, and no line names a predefined
-        # recognizer or a spaCy guess, so the log stays truthful about what could act.
-        self.assertIn("DEFAULT-DETECTION off", self.on)
+    def test_with_the_shipped_settings_the_predefined_recognizers_run_and_are_named(self):
+        # Presidio:PredefinedRecognizers is on in the shipped settings (26112303): the run says so, every line names a
+        # recognizer the file defines or one of Presidio's predefined recognizers, and spaCy's guesses are listed as such.
+        self.assertIn("PREDEFINED-RECOGNIZERS on", self.on)
         run_ = subprocess.run(["dotnet", str(SPIKE), "bridge-json"], capture_output=True, text=True, timeout=300)
         defined = {r["name"] for line in run_.stdout.splitlines() if line.strip() for r in json.loads(line)["recognizers"]}
         # Lone-name recognizers run in .NET, so they are not in the bridge configuration; they are defined in the files.
@@ -149,8 +149,8 @@ class DetectionLogTests(unittest.TestCase):
         for block in blocks(self.on):
             for _, line in block["entries"]:
                 tail = TAIL.search(line)
-                self.assertTrue(set(tail.group(1).split("+")) <= defined | {"allow_list", "none"}, "a line names a recognizer the file does not define")
-                self.assertNotIn("spacy-guess", tail.group(6) or "")
+                unknown = set(tail.group(1).split("+")) - defined - {"allow_list", "none"}
+                self.assertTrue(all(name.endswith("Recognizer") for name in unknown), "a line names a recognizer that is neither defined nor predefined")
 
 
 class FeedLogTests(unittest.TestCase):
@@ -193,7 +193,7 @@ class FeedLogTests(unittest.TestCase):
 
 
 class DetectionLogValuesTests(unittest.TestCase):
-    """WR-020: --detection-log values (as Presidio:DetectionLogValues) adds before and after values to every entry;
+    """WR-020: --detection-log values (as Presidio:DetectionLog:IncludePiiValues) adds before and after values to every entry;
     nothing else changes.
 
     Assertion messages name samples and counts only, never a value."""
@@ -273,8 +273,8 @@ class DetectionLogValuesTests(unittest.TestCase):
     def test_the_run_summary_lists_review_fields_by_slot_and_offset_without_values(self):
         summary = (self.values.output_root / "detection-summary.txt").read_text(encoding="utf-8")
         self.assertRegex(summary, r"(?m)^ACI  review fields \(\d+ files\)$")
-        self.assertIn("Default detection off (Presidio:DefaultDetection=false)", summary, "the summary names the detection mode")
-        self.assertNotIn("spacy-guess", summary)
+        self.assertIn("Predefined recognizers on (Presidio:PredefinedRecognizers=true)", summary, "the summary names the detection mode")
+        self.assertIn("spacy-guess", summary, "the shipped settings run spaCy, and the summary lists its guesses for review")
         entries = [line for line in summary.splitlines() if line.startswith("  ")]
         self.assertGreater(len(entries), 0)
         self.assertTrue(all(re.match(r"  slot \d+ @0x[0-9A-F]+ +\S+ +seen=\d+ ", line) for line in entries),

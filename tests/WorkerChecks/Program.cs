@@ -112,36 +112,76 @@ var withVenv = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCol
 Require(PresidioOptions.Load(withVenv, runRoot).PythonEnvironment == venv, "Presidio:PythonEnvironment resolves against the application folder");
 var noVenv = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:PythonEnvironment", "missing")]).Build();
 Reject(() => PresidioOptions.Load(noVenv, runRoot), "a Python environment without pyvenv.cfg stops startup");
-Require(PresidioOptions.Load(local, runRoot).DetectionLog && !PresidioOptions.Load(dev, runRoot).DetectionLog,
-    "the detection log is on in Local and off in the base settings, so Dev (QF-26111601)");
-var detectionLogOn = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DetectionLog", "true")]).Build();
-Require(PresidioOptions.Load(detectionLogOn, runRoot).DetectionLog, "Presidio:DetectionLog=true turns the detection log on");
-var detectionLogTypo = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DetectionLogs", "true")]).Build();
+// WR-018, WR-020 (26112303): the detection log and its values are on by default and the same in every environment; a
+// deployment switches either off with its variable, and no environment rule switches values off.
+foreach (var (name, configuration) in new[] { ("Local", local), ("Dev", dev) })
+{
+    var loaded = PresidioOptions.Load(configuration, runRoot);
+    Require(loaded.DetectionLog.Enabled && loaded.DetectionLog.IncludePiiValues && loaded.WritesValues && loaded.PredefinedRecognizers,
+        $"in {name} the detection log, its values and the predefined recognizers are on by default");
+}
+Require(local["Presidio:DetectionLog:Enabled"] == "True" && local["Presidio:DetectionLog:IncludePiiValues"] == "True"
+    && local["Presidio:PredefinedRecognizers"] == "True" && local["Presidio:DefaultDetection"] is null && local["Presidio:DetectionLogValues"] is null,
+    "the shipped settings list the three settings as true and none of the retired keys");
+Require(new PresidioOptions().DetectionLog.Enabled && new PresidioOptions().DetectionLog.IncludePiiValues && new PresidioOptions().PredefinedRecognizers,
+    "each setting is also on when it is left out of the file");
+{
+    var json = JsonNode.Parse(File.ReadAllText(settingsFile))!;
+    json["Environments"]!["Prod"] = json["Environments"]!["Dev"]!.DeepClone();
+    string path = Path.Combine(runRoot, "appsettings.prod.json");
+    File.WriteAllText(path, json.ToJsonString());
+    var (prod, prodName) = EnvironmentConfiguration.Build(path, name => name == EnvironmentConfiguration.EnvironmentVariable ? "Prod" : null);
+    var prodOptions = PresidioOptions.Load(prod, runRoot);
+    Require(prodName == "Prod" && prodOptions.WritesValues && prodOptions.PredefinedRecognizers,
+        "a production environment gets the same defaults: values are written unless its deployment switches them off");
+}
+foreach (var (key, check) in new (string, Func<PresidioOptions, bool>)[]
+{
+    ("Presidio:DetectionLog:IncludePiiValues", o => o.DetectionLog.Enabled && !o.DetectionLog.IncludePiiValues && !o.WritesValues),
+    ("Presidio:DetectionLog:Enabled", o => !o.DetectionLog.Enabled && o.DetectionLog.IncludePiiValues && !o.WritesValues),
+    ("Presidio:PredefinedRecognizers", o => !o.PredefinedRecognizers && o.WritesValues)
+})
+{
+    var off = new ConfigurationBuilder().AddConfiguration(dev).AddInMemoryCollection([new(key, "false")]).Build();
+    Require(check(PresidioOptions.Load(off, runRoot)), $"{key}=false switches that setting off and nothing else");
+}
+string variableName = "Presidio__DetectionLog__IncludePiiValues";
+Environment.SetEnvironmentVariable(variableName, "false");
+try
+{
+    var (variable, _) = EnvironmentConfiguration.Build(settingsFile, name => name == EnvironmentConfiguration.EnvironmentVariable ? "Dev" : Environment.GetEnvironmentVariable(name));
+    Require(!PresidioOptions.Load(variable, runRoot).WritesValues, "the Presidio__DetectionLog__IncludePiiValues=false variable keeps the detection log value-free");
+}
+finally { Environment.SetEnvironmentVariable(variableName, null); }
+var detectionLogTypo = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DetectionLog:Enable", "true")]).Build();
 Reject(() => PresidioOptions.Load(detectionLogTypo, runRoot), "a misspelled detection-log key stops startup");
-// WR-020: values in detection lines only with both flags on, and only in Local, Dev and QA. QF-26111601: the values flag
-// is on by default, and outside those environments it is switched off instead of stopping startup.
-var defaults = PresidioOptions.Load(local, runRoot);
-Require(defaults.DetectionLogValues && defaults.WritesValues, "detection log values are on by default, so Local writes them (QF-26111601)");
-var devDefaults = PresidioOptions.Load(dev, runRoot);
-Require(devDefaults.DetectionLogValues && !devDefaults.WritesValues, "Dev has the values flag on but writes nothing while its detection log is off");
-var valuesOff = PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(local)
-    .AddInMemoryCollection([new("Presidio:DetectionLogValues", "false")]).Build(), runRoot);
-Require(!valuesOff.ApplyValuesEnvironment("Prod") && !valuesOff.WritesValues, "with the values flag off, any environment starts unchanged");
-foreach (string allowed in new[] { "Local", "Dev", "QA", "dev", localName })
+// W-007 (26112303): a retired key, in the file or as a variable, stops startup with a value-free message naming its
+// replacement, so an old Presidio__DetectionLogValues=false is never lost silently.
+foreach (var (retired, value, replacement) in new[]
 {
-    var envOptions = PresidioOptions.Load(local, runRoot);
-    Require(!envOptions.ApplyValuesEnvironment(allowed) && envOptions.WritesValues, $"values stay on in the {allowed} environment");
-}
-Require(true, "values are allowed in Local, Dev and QA (any case), and when an unset DOTNET_ENVIRONMENT falls back to Local");
-foreach (string refused in new[] { "Prod", "Production", "Stage" })
+    ("DefaultDetection", "false", "Presidio:PredefinedRecognizers"),
+    ("DetectionLogValues", "false", "Presidio:DetectionLog:IncludePiiValues"),
+    ("DetectionLog", "true", "Presidio:DetectionLog:Enabled")
+})
 {
-    var envOptions = PresidioOptions.Load(local, runRoot);
-    Require(envOptions.ApplyValuesEnvironment(refused) && !envOptions.DetectionLogValues && !envOptions.WritesValues && envOptions.DetectionLog,
-        $"in the {refused} environment the values flag is switched off and the worker still starts with a value-free log");
+    var old = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:" + retired, value)]).Build();
+    try
+    {
+        PresidioOptions.Load(old, runRoot);
+        throw new Exception("Expected rejection: the retired Presidio:" + retired + " key");
+    }
+    catch (InvalidOperationException ex) when (ex.Message == $"Presidio:{retired} is no longer supported; use {replacement}.")
+    {
+        Console.WriteLine($"PASS the retired Presidio:{retired} key stops startup and names {replacement}");
+    }
 }
-var valuesOnly = PresidioOptions.Load(new ConfigurationBuilder().AddConfiguration(dev)
-    .AddInMemoryCollection([new("Presidio:DetectionLogValues", "true")]).Build(), runRoot);
-Require(valuesOnly.DetectionLogValues && !valuesOnly.WritesValues, "values without the detection log write nothing (the worker warns at startup)");
+Environment.SetEnvironmentVariable("Presidio__DetectionLogValues", "false");
+try
+{
+    var (retiredVariable, _) = EnvironmentConfiguration.Build(settingsFile, Environment.GetEnvironmentVariable);
+    Reject(() => PresidioOptions.Load(retiredVariable, runRoot), "the retired Presidio__DetectionLogValues variable stops startup");
+}
+finally { Environment.SetEnvironmentVariable("Presidio__DetectionLogValues", null); }
 foreach (string removed in new[] { "PolicyFile", "XdrLayoutFile", "ReferenceLayoutFile" })
 {
     var oldKey = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:" + removed, "Configuration/x.xml")]).Build();
@@ -154,37 +194,21 @@ foreach (string outside in new[] { Path.GetFullPath(Path.Combine(runRoot, "..", 
 }
 Require(PresidioOptions.Load(local, runRoot).RecognizerDirectory == Path.GetFullPath("Configuration/recognizers", runRoot),
     "Presidio:RecognizerDirectory resolves against the application folder");
-// Presidio:DefaultDetection: bound strictly like its siblings, off by default, set per environment or by variable.
-Require(local["Presidio:DefaultDetection"] == "False" && !new PresidioOptions().DefaultDetection,
-    "the shipped settings list Presidio:DefaultDetection as false, which is also the default when it is left out");
-Require(!PresidioOptions.Load(local, runRoot).DefaultDetection && !PresidioOptions.Load(dev, runRoot).DefaultDetection,
-    "Presidio:DefaultDetection binds as false in Local and Dev, so only the defined recognizers act");
-var defaultDetectionOn = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DefaultDetection", "true")]).Build();
-Require(PresidioOptions.Load(defaultDetectionOn, runRoot).DefaultDetection, "Presidio:DefaultDetection=true binds and switches default detection on");
-{
-    var json = JsonNode.Parse(File.ReadAllText(settingsFile))!;
-    json["Environments"]!["Dev"]!["Presidio"] = new JsonObject { ["DefaultDetection"] = true };
-    string path = Path.Combine(runRoot, "appsettings.default-detection.json");
-    File.WriteAllText(path, json.ToJsonString());
-    var (devOn, _) = EnvironmentConfiguration.Build(path, name => name == EnvironmentConfiguration.EnvironmentVariable ? "Dev" : null);
-    var (localStill, _) = EnvironmentConfiguration.Build(path, noVariables);
-    Require(PresidioOptions.Load(devOn, runRoot).DefaultDetection && !PresidioOptions.Load(localStill, runRoot).DefaultDetection,
-        "an environment block overrides Presidio:DefaultDetection for that environment only");
-}
-Environment.SetEnvironmentVariable("Presidio__DefaultDetection", "true");
+// Presidio:PredefinedRecognizers: bound strictly like its siblings, on by default, switched by a variable.
+Environment.SetEnvironmentVariable("Presidio__PredefinedRecognizers", "false");
 try
 {
-    var (variable, _) = EnvironmentConfiguration.Build(settingsFile, noVariables);
-    Require(PresidioOptions.Load(variable, runRoot).DefaultDetection, "the Presidio__DefaultDetection environment variable overrides the settings file");
+    var (variable, _) = EnvironmentConfiguration.Build(settingsFile, Environment.GetEnvironmentVariable);
+    Require(!PresidioOptions.Load(variable, runRoot).PredefinedRecognizers, "the Presidio__PredefinedRecognizers environment variable overrides the settings file");
 }
-finally { Environment.SetEnvironmentVariable("Presidio__DefaultDetection", null); }
-var defaultDetectionBad = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DefaultDetection", "sometimes")]).Build();
-Reject(() => PresidioOptions.Load(defaultDetectionBad, runRoot), "a Presidio:DefaultDetection value other than true or false stops startup");
-var defaultDetectionTypo = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:DefaultDetections", "true")]).Build();
-Reject(() => PresidioOptions.Load(defaultDetectionTypo, runRoot), "a misspelled default-detection key stops startup");
-Require(!FeedPipelineConfiguration.Load(Path.Combine(project, "src", "PresidioDemo.Core", "Configuration", "recognizers")).DefaultDetection
-    && FeedPipelineConfiguration.Load(Path.Combine(project, "src", "PresidioDemo.Core", "Configuration", "recognizers"), defaultDetection: true).CreateProtector().DefaultDetection,
-    "the setting reaches the protector through the pipeline configuration, off unless given");
+finally { Environment.SetEnvironmentVariable("Presidio__PredefinedRecognizers", null); }
+var predefinedRecognizersBad = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:PredefinedRecognizers", "sometimes")]).Build();
+Reject(() => PresidioOptions.Load(predefinedRecognizersBad, runRoot), "a Presidio:PredefinedRecognizers value other than true or false stops startup");
+var predefinedRecognizersTypo = new ConfigurationBuilder().AddConfiguration(local).AddInMemoryCollection([new("Presidio:PredefinedRecognizerSettings", "true")]).Build();
+Reject(() => PresidioOptions.Load(predefinedRecognizersTypo, runRoot), "a misspelled predefined-recognizers key stops startup");
+Require(FeedPipelineConfiguration.Load(Path.Combine(project, "src", "PresidioDemo.Core", "Configuration", "recognizers")).PredefinedRecognizers
+    && !FeedPipelineConfiguration.Load(Path.Combine(project, "src", "PresidioDemo.Core", "Configuration", "recognizers"), predefinedRecognizers: false).CreateProtector().PredefinedRecognizers,
+    "the setting reaches the protector through the pipeline configuration, on unless switched off");
 
 // FeedWorker delivery rules
 var options = MessagingOptions.Load(local);

@@ -78,13 +78,13 @@ public sealed class FeedWorkerService(IMessagingConnection connection, IMessageC
             pythonStarted = true;
             var protector = pipeline.CreateProtector();
             protector.Configure();
-            if (protector.DefaultDetection)
+            if (protector.PredefinedRecognizers)
             {
-                log.LogInformation("Default detection on (Presidio:DefaultDetection=true): the recognizers each feed's file defines and Presidio's predefined recognizers act.");
+                log.LogInformation("Predefined recognizers on (Presidio:PredefinedRecognizers=true): the recognizers each feed's file defines and Presidio's predefined recognizers act.");
             }
             else
             {
-                log.LogInformation("Default detection off (Presidio:DefaultDetection=false): only the recognizers each feed's file defines act.");
+                log.LogInformation("Predefined recognizers off (Presidio:PredefinedRecognizers=false): only the recognizers each feed's file defines act.");
             }
             var processor = new FeedMessageProcessor(pipeline.CreateRouter(protector));
             // ConsumersPerTask workers per feed, each on its own broker flow: .NET parsing and broker round trips overlap
@@ -97,19 +97,19 @@ public sealed class FeedWorkerService(IMessagingConnection connection, IMessageC
             }
             var workers = routes.SelectMany(pair => Enumerable.Range(0, messaging.ConsumersPerTask).Select(_ =>
                 new FeedWorker(pair.Key, pair.Value, messaging, consumer, publisher, processor,
-                    loggers.CreateLogger("PresidioDemo.Worker." + FeedCatalog.Get(pair.Key).FolderName), detectionLog: presidio.DetectionLog,
+                    loggers.CreateLogger("PresidioDemo.Worker." + FeedCatalog.Get(pair.Key).FolderName), detectionLog: presidio.DetectionLog.Enabled,
                     detectionLogValues: presidio.WritesValues).RunAsync(stoppingToken))).ToArray();
             if (presidio.WritesValues)
             {
-                log.LogWarning("Detection log on with values: each line also carries the actual decoded value (WR-020). Non-production only.");
+                log.LogWarning("Detection log on with values: each line also carries the actual decoded value, personal data included (WR-020). Set Presidio__DetectionLog__IncludePiiValues=false to keep the lines value-free.");
             }
-            else if (presidio.DetectionLog)
+            else if (presidio.DetectionLog.Enabled)
             {
                 log.LogInformation("Detection log on: one value-free line per decoded string (WR-018).");
             }
-            else if (presidio.DetectionLogValues)
+            else if (presidio.DetectionLog.IncludePiiValues)
             {
-                log.LogWarning("Presidio:DetectionLogValues has no effect while Presidio:DetectionLog is off; no detection lines are written.");
+                log.LogWarning("Presidio:DetectionLog:IncludePiiValues has no effect while Presidio:DetectionLog:Enabled is off; no detection lines are written.");
             }
             if (messaging.ConsumersPerTask > 1)
             {

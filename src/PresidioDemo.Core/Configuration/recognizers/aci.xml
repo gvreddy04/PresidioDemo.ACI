@@ -10,7 +10,7 @@
     /paxl_id, /pax_id: 4-byte integers, not strings, so decoded-text detection never sees them; they are published as
         received. The unresolvedIdentifier and unresolvedRecordReference_Prefix recognizers act on the
         unresolved_extension strings those names stand for.
-  Presidio:DefaultDetection (appsettings.json, default false) decides whether Presidio's predefined recognizers run too:
+  Presidio:PredefinedRecognizers (appsettings.json, default true) decides whether Presidio's predefined recognizers run too:
     false: only the recognizers defined here act; Presidio's predefined recognizers (email, phone, credit card, IP,
            IBAN, spaCy PERSON, LOCATION, NRP, DATE_TIME and the rest) do not run. Example: in
            DA12345678 MILLER/JORDAN, both the loyalty number and the name are masked, and alex@example.com is not.
@@ -23,7 +23,7 @@
 -->
 <recognizers feed="ACI" language="en" default_score_threshold="0.5">
 
-  <!-- ===== Predefined recognizers (Presidio's own). They run only with Presidio:DefaultDetection true, and then all of them
+  <!-- ===== Predefined recognizers (Presidio's own). They run only with Presidio:PredefinedRecognizers true, and then all of them
        run unless switched off by class name, for example:
        <recognizer name="CryptoRecognizer" type="predefined" enabled="false" />  ===== -->
 
@@ -57,7 +57,7 @@
   <!-- ===== Allow list: a decoded string that matches an item end to end is published unchanged. ===== -->
   <!-- Examples: 20261109, 20261109 14.05.33.120, 14.05.33.120, 3412 (aircraft number), B12 or " C7" (gate),
        UNKNOWN or the truncated UNKNOW (process name), **** (already masked upstream). The items stop no recognizer defined
-       above; they are kept for Presidio:DefaultDetection true, where Presidio's DATE_TIME and other guesses would otherwise
+       above; they are kept for Presidio:PredefinedRecognizers true, where Presidio's DATE_TIME and other guesses would otherwise
        change such strings. -->
   <allow_list match="regex">
     <item>^\d{8}$</item>
@@ -74,7 +74,7 @@
   <anonymizer entity="PERSON" type="mask" masking_char="*" />
   <anonymizer entity="LOYALTY_NUMBER" type="mask" masking_char="*" />
   <anonymizer entity="UNCLASSIFIED_IDENTIFIER" type="mask" masking_char="*" />
-  <!-- Every other entity: with Presidio:DefaultDetection true, Presidio's EMAIL_ADDRESS, CREDIT_CARD, IP_ADDRESS,
+  <!-- Every other entity: with Presidio:PredefinedRecognizers true, Presidio's EMAIL_ADDRESS, CREDIT_CARD, IP_ADDRESS,
        LOCATION and the rest. Without this line Presidio's default applies: replace with <ENTITY>. -->
   <anonymizer entity="DEFAULT" type="mask" masking_char="*" />
 

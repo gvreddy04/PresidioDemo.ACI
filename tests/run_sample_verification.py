@@ -3,7 +3,7 @@
 Every published sample must keep its MQ metadata and framing, and protect every value of the frozen parity baseline
 (tests/fixtures/parity-baseline.json) whose entity a recognizer defined in the feed's file produces, unless it is an
 approved exception (parity-exceptions.json). Every other baseline value is counted as out of scope and never fails the
-run. The harness runs with the shipped Presidio:DefaultDetection off. A negative sample listed in EXPECTED_REJECTIONS must be rejected with its reason.
+run. The harness runs with the shipped settings: Presidio:PredefinedRecognizers on and the detection log with values. A negative sample listed in EXPECTED_REJECTIONS must be rejected with its reason.
 Exit 0 when every check passes, 1 otherwise.
 """
 from collections import Counter

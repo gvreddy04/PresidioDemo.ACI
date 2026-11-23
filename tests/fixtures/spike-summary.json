@@ -1,7 +1,7 @@
 {
   "parity": "PASS",
   "scope": "baseline values whose entity a recognizer defined in the feed\u0027s file produces: LOYALTY_NUMBER, PERSON, UNCLASSIFIED_IDENTIFIER",
-  "defaultDetection": false,
+  "predefinedRecognizers": true,
   "protected": {
     "baseline": 15,
     "inScope": 15,
@@ -42,16 +42,16 @@
   "throughput": {
     "rounds": 20,
     "messages": 120,
-    "nlpNer": "off (Presidio:DefaultDetection false); spaCy does not run (no context words)",
-    "messagesPerSecondPerTask": 1319,
+    "nlpNer": "on (spaCy en_core_web_lg)",
+    "messagesPerSecondPerTask": 122.9,
     "feeds": [
       {
         "feed": "ACI",
-        "messagesPerSecondPerTask": 1330.1,
-        "tasks": 1
+        "messagesPerSecondPerTask": 123,
+        "tasks": 4
       }
     ],
-    "tasksForPeak": 1,
+    "tasksForPeak": 4,
     "assumption": "400 msg/s peak for the ACI feed; one worker process per ECS task"
   },
   "rejected": []

@@ -56,7 +56,7 @@ public enum ReviewReason
     /// </summary>
     NoAction = 4,
     /// <summary>
-    /// Changed by a guess of the spaCy named-entity recognizer; only possible with <c>Presidio:DefaultDetection</c> on.
+    /// Changed by a guess of the spaCy named-entity recognizer; only possible with <c>Presidio:PredefinedRecognizers</c> on.
     /// </summary>
     SpacyGuess = 8,
     /// <summary>
@@ -97,7 +97,7 @@ public sealed record DetectionEvent(int Slot, int Length, string Shape, string R
 /// <param name="Values">The protected value of every field, by identifier.</param>
 /// <param name="Events">The value-free detection events, in candidate order.</param>
 /// <param name="CandidateValues">The decoded value of each candidate, by slot, kept beside the events so the events stay
-/// value-free; written to the detection log only with <c>Presidio:DetectionLogValues</c> on (WR-020).</param>
+/// value-free; written to the detection log only with <c>Presidio:DetectionLog:IncludePiiValues</c> on (WR-020).</param>
 /// <param name="ProtectedCandidateValues">The protected value of each candidate, by slot, for the after values of the
 /// detection log under WR-020.</param>
 public sealed record DetectionOutcome(IReadOnlyDictionary<string, string> Values, IReadOnlyList<DetectionEvent> Events,
@@ -107,7 +107,7 @@ public sealed record DetectionOutcome(IReadOnlyDictionary<string, string> Values
 
 /// <summary>
 /// Protects one parsed message with its feed's recognizer file. Presidio only returns spans; every decision is made here.
-/// The spans come from the recognizers the file defines and, only with <c>Presidio:DefaultDetection</c> on, from Presidio's
+/// The spans come from the recognizers the file defines and, only with <c>Presidio:PredefinedRecognizers</c> on, from Presidio's
 /// predefined recognizers too. Each decoded string is decided on its own (WR-014): a whole-string allow-list match is
 /// published unchanged; otherwise each span at or above the threshold gets its entity's action (its own, else
 /// <c>DEFAULT</c>, else <c>replace</c>), and a string in which nothing is detected is published unchanged. Every result keeps
@@ -115,15 +115,15 @@ public sealed record DetectionOutcome(IReadOnlyDictionary<string, string> Values
 /// </summary>
 /// <remarks>
 /// A file's lone-name recognizers run here, after Presidio returned every span of the message, so a lone string equal to a
-/// name part found elsewhere in the message is protected too. With <c>Presidio:DefaultDetection</c> off (the shipped
-/// default), a file that defines no custom recognizer is not sent to Presidio at all, so its messages are published as
+/// name part found elsewhere in the message is protected too. With <c>Presidio:PredefinedRecognizers</c> off (on is the
+/// shipped default), a file that defines no custom recognizer is not sent to Presidio at all, so its messages are published as
 /// received; spaCy runs only for a custom recognizer with context words, and then without its named-entity component (see
 /// <c>python/presidio_demo.py</c>).
 /// </remarks>
 /// <param name="files">The validated recognizer files by feed.</param>
-/// <param name="defaultDetection">Whether Presidio's predefined recognizers run beside the defined ones
-/// (<c>Presidio:DefaultDetection</c>). When false they are not registered at all, so they never run.</param>
-public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, RecognizerFile> files, bool defaultDetection = false) : IFeedProtector
+/// <param name="predefinedRecognizers">Whether Presidio's predefined recognizers run beside the defined ones
+/// (<c>Presidio:PredefinedRecognizers</c>, on by default). When false they are not registered at all, so they never run.</param>
+public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, RecognizerFile> files, bool predefinedRecognizers = true) : IFeedProtector
 {
 
     #region Fields and Constants
@@ -145,15 +145,15 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
     /// <summary>
     /// Gets whether Presidio's predefined recognizers run beside the recognizers each file defines.
     /// </summary>
-    /// <value>The <c>Presidio:DefaultDetection</c> setting this protector was created with.</value>
-    public bool DefaultDetection => defaultDetection;
+    /// <value>The <c>Presidio:PredefinedRecognizers</c> setting this protector was created with.</value>
+    public bool PredefinedRecognizers => predefinedRecognizers;
 
     #endregion
 
     #region Methods
 
     /// <summary>
-    /// Builds every feed's Presidio registry, with Presidio's predefined recognizers only when <see cref="DefaultDetection"/>
+    /// Builds every feed's Presidio registry, with Presidio's predefined recognizers only when <see cref="PredefinedRecognizers"/>
     /// is on. Call once after <see cref="PythonHost.Start"/>.
     /// </summary>
     /// <exception cref="InvalidDataException">The bridge rejected a configuration, such as an unknown predefined recognizer.</exception>
@@ -163,7 +163,7 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
         {
             try
             {
-                PythonHost.Call("configure_feed", file.ToBridgeJson(defaultDetection));
+                PythonHost.Call("configure_feed", file.ToBridgeJson(predefinedRecognizers));
             }
             catch (Exception ex)
             {
@@ -213,8 +213,8 @@ public sealed class DetectingFeedProtector(IReadOnlyDictionary<FeedType, Recogni
             throw new InvalidDataException("An allow-list pattern timed out; input retained and no output was published.");
         }
 
-        // Without default detection Presidio runs the file's custom recognizers only; a file without any is not sent at all.
-        var spans = defaultDetection || file.Recognizers.Count > 0
+        // Without predefined recognizers Presidio runs the file's custom recognizers only; a file without any is not sent at all.
+        var spans = predefinedRecognizers || file.Recognizers.Count > 0
             ? await AnalyzeAsync(feed, pending.Select(slot => candidates[slot].Value).ToArray(), cancellationToken)
             : pending.Select(_ => Array.Empty<Span>()).ToArray();
         // Lone names need every span of the message, so they are added once Presidio has answered for all its strings.

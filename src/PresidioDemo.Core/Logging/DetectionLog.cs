@@ -35,8 +35,8 @@ public enum DetectionGroup
 /// Formats the detection log (WR-018): one block per message, with a header line and the decoded strings listed in the
 /// PII, non-PII and review groups, each exactly once. A string is located by its slot and payload byte offset.
 /// Value-free unless decoded values are passed, which happens only with
-/// <c>Presidio:DetectionLogValues</c> on in a non-production environment (WR-020). Written only while
-/// <c>Presidio:DetectionLog</c> is on.
+/// <c>Presidio:DetectionLog:IncludePiiValues</c> on (WR-020). Written only while
+/// <c>Presidio:DetectionLog:Enabled</c> is on.
 /// </summary>
 /// <remarks>
 /// The header starts in the first column and every other line is indented, so a log collector can treat each block as one

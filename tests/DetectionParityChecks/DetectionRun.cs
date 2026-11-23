@@ -40,13 +40,13 @@ public static class DetectionRun
     /// Loads the recognizer sets and configures the Python bridge. Python must be started.
     /// </summary>
     /// <param name="root">The repository root.</param>
-    /// <param name="defaultDetection">Whether Presidio's predefined recognizers run too; off, the shipped
-    /// <c>Presidio:DefaultDetection</c>, unless given.</param>
+    /// <param name="predefinedRecognizers">Whether Presidio's predefined recognizers run too; on, the shipped
+    /// <c>Presidio:PredefinedRecognizers</c>, unless given.</param>
     /// <returns>The configured protector.</returns>
-    public static DetectingFeedProtector CreateProtector(string root, bool defaultDetection = false)
+    public static DetectingFeedProtector CreateProtector(string root, bool predefinedRecognizers = true)
     {
         var protector = new DetectingFeedProtector(RecognizerFileReader.ReadAll(Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers")),
-            defaultDetection);
+            predefinedRecognizers);
         protector.Configure();
         return protector;
     }
@@ -84,13 +84,13 @@ public static class DetectionRun
     /// Writes the detection log for every sample: one value-free block per sample when on, nothing when off (V-05).
     /// </summary>
     /// <param name="root">The repository root.</param>
-    /// <param name="enabled">Whether the detection log is on, as <c>Presidio:DetectionLog</c> would set it.</param>
+    /// <param name="enabled">Whether the detection log is on, as <c>Presidio:DetectionLog:Enabled</c> would set it.</param>
     /// <returns>A task that completes when every sample was processed.</returns>
     public static async Task WriteLogAsync(string root, bool enabled)
     {
         var protector = CreateProtector(root);
         // Value-free: names the mode the run used, so a reader knows whether Presidio's predefined recognizers could act.
-        Console.WriteLine($"DEFAULT-DETECTION {(protector.DefaultDetection ? "on" : "off")}");
+        Console.WriteLine($"PREDEFINED-RECOGNIZERS {(protector.PredefinedRecognizers ? "on" : "off")}");
         foreach (string path in SampleFiles.All(root))
         {
             var result = await ProcessAsync(protector, path, CancellationToken.None);

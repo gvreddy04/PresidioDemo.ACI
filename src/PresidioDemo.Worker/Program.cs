@@ -13,16 +13,13 @@ using PresidioDemo.Worker.Pipeline;
 string baseDirectory = AppContext.BaseDirectory;
 IHost host;
 string environment;
-bool valuesSwitchedOff;
 try
 {
     (var configuration, environment) = EnvironmentConfiguration.Build(Path.Combine(baseDirectory, "appsettings.json"));
     var messaging = MessagingOptions.Load(configuration);
     FeedWorkerService.Routes(messaging);
     var presidio = PresidioOptions.Load(configuration, baseDirectory);
-    // Outside Local, Dev and QA the values flag is switched off instead of stopping the worker (QF-26111601).
-    valuesSwitchedOff = presidio.ApplyValuesEnvironment(environment);
-    var pipeline = FeedPipelineConfiguration.Load(presidio.RecognizerDirectory, presidio.DefaultDetection);
+    var pipeline = FeedPipelineConfiguration.Load(presidio.RecognizerDirectory, presidio.PredefinedRecognizers);
 
     var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
     {
@@ -62,10 +59,6 @@ catch (Exception ex) when (ex is InvalidOperationException or InvalidDataExcepti
 using (host)
 {
     Console.WriteLine($"PRESIDIO FEED WORKER | environment {environment} | Ctrl+C or SIGTERM stops after the current messages.");
-    if (valuesSwitchedOff)
-    {
-        Console.WriteLine($"WARNING Presidio:DetectionLogValues is ignored in the {environment} environment (allowed only in Local, Dev and QA); detection blocks stay value-free.");
-    }
     var worker = host.Services.GetRequiredService<FeedWorkerService>();
     await host.RunAsync();
     // A worker failure (for example an unreachable broker) stops the host; report it in the exit code.

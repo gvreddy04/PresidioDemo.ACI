@@ -5,8 +5,9 @@ namespace PresidioDemo.DetectionParity;
 
 /// <summary>
 /// Checks the shipped recognizer file (WR-014): it loads, its recognizers produce exactly the feed's expected entities, and
-/// every PERSON value of the frozen baseline has a recognizer in its feed's file. With <c>Presidio:DefaultDetection</c>
-/// off (the shipped default) Presidio's own guesses do not run, so only a recognizer the file defines counts. The parity
+/// every PERSON value of the frozen baseline has a recognizer in its feed's file. Only a recognizer the file defines counts:
+/// Presidio's own guesses run with <c>Presidio:PredefinedRecognizers</c> on (the shipped default), but a deployment may switch
+/// them off, so the file must cover PERSON on its own. The parity
 /// gate checks the baseline values of those entities; every other baseline value is out of scope.
 /// </summary>
 public static class ConfigurationChecks
@@ -60,7 +61,7 @@ public static class ConfigurationChecks
 
     /// <summary>
     /// Returns the feeds whose baseline has a PERSON value but whose file defines no recognizer that produces PERSON.
-    /// Presidio's predefined PERSON does not count: it does not run with <c>Presidio:DefaultDetection</c> off.
+    /// Presidio's predefined PERSON does not count: it does not run when <c>Presidio:PredefinedRecognizers</c> is switched off.
     /// </summary>
     /// <param name="baseline">The frozen baseline.</param>
     /// <param name="files">The recognizer files by feed.</param>

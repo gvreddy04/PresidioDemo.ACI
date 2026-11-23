@@ -1,5 +1,5 @@
 """Unit checks for the local detection bridge: spans only, per-feed registries from the Presidio-style file, the
-Presidio:DefaultDetection switch (defaultDetection in the bridge JSON), timeouts. Every value is made up."""
+Presidio:PredefinedRecognizers switch (predefinedRecognizers in the bridge JSON), timeouts. Every value is made up."""
 from pathlib import Path
 import json
 import subprocess
@@ -13,10 +13,10 @@ import presidio_demo
 SPIKE = Path(__file__).resolve().parents[2] / "tests" / "DetectionParityChecks" / "bin" / "Debug" / "net10.0" / "DetectionParityChecks.dll"
 
 
-def config(feed, disabled=(), recognizers=(), default_detection=False):
-    """Return the bridge JSON for a feed: the default-detection switch, switched-off predefined recognizers and custom
+def config(feed, disabled=(), recognizers=(), predefined_recognizers=False):
+    """Return the bridge JSON for a feed: the predefined-recognizers switch, switched-off predefined recognizers and custom
     recognizers."""
-    return json.dumps({"feed": feed, "language": "en", "defaultDetection": default_detection, "disabled": list(disabled),
+    return json.dumps({"feed": feed, "language": "en", "predefinedRecognizers": predefined_recognizers, "disabled": list(disabled),
                        "recognizers": list(recognizers)})
 
 
@@ -65,24 +65,24 @@ class DetectionBridgeTests(unittest.TestCase):
             raise AssertionError("Build tests/DetectionParityChecks first: " + run.stdout + run.stderr)
         cls.lines = [line for line in run.stdout.splitlines() if line.strip()]
         cls.feeds = [presidio_demo.configure_feed(line) for line in cls.lines]
-        # The shipped file with the switch on, under its own feed name, for the default-detection-on cases.
+        # The shipped file with the switch on, under its own feed name, for the predefined-recognizers-on cases.
         shipped = json.loads(cls.lines[0])
         cls.custom_names = {r["name"] for r in shipped["recognizers"]}
         cls.shipped_context = any(r["context"] for r in shipped["recognizers"])
-        presidio_demo.configure_feed(json.dumps(dict(shipped, feed="ShippedOn", defaultDetection=True)))
+        presidio_demo.configure_feed(json.dumps(dict(shipped, feed="ShippedOn", predefinedRecognizers=True)))
         presidio_demo.configure_feed(config("OnlyA", recognizers=[custom("demoCode", "DEMO_CODE", r"DEMO-\d{4}")]))
-        presidio_demo.configure_feed(config("OnlyB", default_detection=True))
+        presidio_demo.configure_feed(config("OnlyB", predefined_recognizers=True))
         presidio_demo.configure_feed(config("Nothing"))
-        presidio_demo.configure_feed(config("NoCards", disabled=["CreditCardRecognizer"], default_detection=True))
+        presidio_demo.configure_feed(config("NoCards", disabled=["CreditCardRecognizer"], predefined_recognizers=True))
         presidio_demo.configure_feed(config("Titles", recognizers=[custom("titles", "TITLE", deny_list=["MR", "DR"])]))
         presidio_demo.configure_feed(config("Context", recognizers=[custom("member", "DEMO_CODE", r"ZX\d{4}", score=0.3, context=["membership"])]))
 
     def test_the_aci_feed_configures(self):
         self.assertEqual(sorted(self.feeds), ["ACI"])
 
-    def test_the_shipped_file_is_bridged_with_default_detection_off(self):
+    def test_the_shipped_file_is_bridged_with_predefined_recognizers_off(self):
         self.assertTrue(self.custom_names)
-        self.assertTrue(all(json.loads(line)["defaultDetection"] is False for line in self.lines))
+        self.assertTrue(all(json.loads(line)["predefinedRecognizers"] is False for line in self.lines))
 
     def test_the_field_list_recognizers_return_spans_and_nothing_else_is_detected(self):
         name, compound, loyalty, reference, identifier, card = spans(
@@ -95,62 +95,62 @@ class DetectionBridgeTests(unittest.TestCase):
         self.assertEqual(identifier, [("UNCLASSIFIED_IDENTIFIER", "1A2BCDE3456", "unresolvedIdentifier")])
         self.assertEqual(card, [], "a card number is outside the ACI field list")
 
-    def test_default_detection_off_with_recognizers_runs_only_the_defined_ones(self):
+    def test_predefined_recognizers_off_with_recognizers_runs_only_the_defined_ones(self):
         mixed, guess = spans("ACI", "CTCEDAHK1 alex@example.com -1MILLER/JORDAN", "Contact Alex Sample in Paris")
         self.assertEqual(mixed, [("PERSON", "MILLER/JORDAN", "passengerName")],
                          "the made-up email stays undetected; the SURNAME/GIVEN name is found")
         self.assertEqual(guess, [], "no spaCy PERSON or LOCATION guess runs")
 
-    def test_default_detection_on_with_recognizers_runs_both(self):
+    def test_predefined_recognizers_on_with_recognizers_runs_both(self):
         found = spans("ShippedOn", "CTCEDAHK1 alex@example.com -1MILLER/JORDAN")[0]
         self.assertIn(("EMAIL_ADDRESS", "alex@example.com", "EmailRecognizer"), found)
         self.assertIn(("PERSON", "MILLER/JORDAN", "passengerName"), found)
 
-    def test_built_in_email_is_found_in_free_text_with_default_detection_on(self):
+    def test_built_in_email_is_found_in_free_text_with_predefined_recognizers_on(self):
         found = spans("ShippedOn", "Contact emily.carter@example.com today")[0]
         self.assertIn("EMAIL_ADDRESS", [entity for entity, text, name in found])
 
-    def test_default_detection_on_without_recognizers_runs_only_presidio(self):
+    def test_predefined_recognizers_on_without_recognizers_runs_only_presidio(self):
         found = spans("OnlyB", "Card 4111 1111 1111 1111", "Contact Alex Sample", "MILLER/JORDAN")
         self.assertIn(("CREDIT_CARD", "4111 1111 1111 1111", "CreditCardRecognizer"), found[0])
         self.assertIn(("PERSON", "Alex Sample", "SpacyRecognizer"), found[1])
         self.assertFalse(self.custom_names & {n for each in found for e, t, n in each}, "no custom recognizer acts")
 
-    def test_default_detection_off_without_recognizers_detects_nothing(self):
+    def test_predefined_recognizers_off_without_recognizers_detects_nothing(self):
         self.assertEqual(spans("Nothing", "Card 4111 1111 1111 1111", "Contact Alex Sample", "alex@example.com", "MILLER/JORDAN"),
                          [[], [], [], []])
 
-    def test_spacy_runs_with_default_detection_off_only_for_context_words_and_then_without_ner(self):
+    def test_spacy_runs_with_predefined_recognizers_off_only_for_context_words_and_then_without_ner(self):
         # Off, no recognizer reads spaCy's named entities: spaCy does not run for a feed whose custom recognizers have no
         # context words, and runs without its NER component when one has; on, it runs whole, as before.
         self.assertEqual(pipes_during("OnlyA", "ref DEMO-1234"), [], "no context words: spaCy does not run")
         self.assertEqual(pipes_during("Nothing", "MILLER/JORDAN"), [], "no custom recognizer: spaCy does not run")
-        self.assertIsNone(presidio_demo._feeds["Nothing"][0], "no custom recognizer and default detection off: no engine")
+        self.assertIsNone(presidio_demo._feeds["Nothing"][0], "no custom recognizer and predefined recognizers off: no engine")
         context = pipes_during("Context", "membership ZX1234")
         self.assertIn("lemmatizer", context)
         self.assertNotIn("ner", context)
         shipped = pipes_during(self.feeds[0], "MILLER/JORDAN")
         self.assertEqual("lemmatizer" in shipped, self.shipped_context, "the shipped file runs spaCy exactly when it has context words")
         self.assertNotIn("ner", shipped)
-        self.assertIn("ner", pipes_during("ShippedOn", "MILLER/JORDAN"), "default detection on runs spaCy with NER")
+        self.assertIn("ner", pipes_during("ShippedOn", "MILLER/JORDAN"), "predefined recognizers on runs spaCy with NER")
         self.assertIn("ner", presidio_demo.nlp_engine.get_nlp("en").pipe_names, "the shared pipeline is restored after the call")
 
     def test_the_shipped_file_has_no_context_words_so_spacy_does_not_run(self):
-        # passengerName has no context words, so with default detection off spaCy does not run at all.
+        # passengerName has no context words, so with predefined recognizers off spaCy does not run at all.
         self.assertFalse(self.shipped_context)
         self.assertEqual(pipes_during("ACI", "MILLER/JORDAN"), [])
 
-    def test_a_context_word_still_raises_a_match_with_default_detection_off(self):
-        # spaCy's lemmas reach the context enhancer, so a context word next to a match works as with default detection on.
+    def test_a_context_word_still_raises_a_match_with_predefined_recognizers_off(self):
+        # spaCy's lemmas reach the context enhancer, so a context word next to a match works as with predefined recognizers on.
         self.assertGreaterEqual(top_score("Context", "membership ZX1234"), 0.5)
         self.assertAlmostEqual(top_score("Context", "ZX1234"), 0.3)
 
-    def test_default_detection_must_be_true_or_false(self):
+    def test_predefined_recognizers_must_be_true_or_false(self):
         for value in ("yes", None, 1):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                presidio_demo.configure_feed(json.dumps(dict(json.loads(config("Bad")), defaultDetection=value)))
+                presidio_demo.configure_feed(json.dumps(dict(json.loads(config("Bad")), predefinedRecognizers=value)))
         missing = json.loads(config("Missing"))
-        del missing["defaultDetection"]
+        del missing["predefinedRecognizers"]
         with self.assertRaises(KeyError):
             presidio_demo.configure_feed(json.dumps(missing))
 
@@ -163,9 +163,9 @@ class DetectionBridgeTests(unittest.TestCase):
         self.assertNotIn("CREDIT_CARD", [e for e, t, n in spans("NoCards", "Card 4111 1111 1111 1111")[0]])
 
     def test_an_unknown_predefined_recognizer_name_is_rejected_in_both_modes(self):
-        for default_detection in (False, True):
-            with self.subTest(default_detection=default_detection), self.assertRaises(ValueError):
-                presidio_demo.configure_feed(config("Typo", disabled=["CreditCardRecogniser"], default_detection=default_detection))
+        for predefined_recognizers in (False, True):
+            with self.subTest(predefined_recognizers=predefined_recognizers), self.assertRaises(ValueError):
+                presidio_demo.configure_feed(config("Typo", disabled=["CreditCardRecogniser"], predefined_recognizers=predefined_recognizers))
 
     def test_a_deny_list_recognizer_detects_its_words(self):
         self.assertIn(("TITLE", "DR", "titles"), spans("Titles", "SEE DR LI")[0])

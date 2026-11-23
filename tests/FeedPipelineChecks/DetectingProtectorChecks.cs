@@ -9,7 +9,7 @@ using PresidioDemo.Core.Protection;
 /// Checks the decoded-text protector (WR-014, WR-015): each decoded string is decided on its own, detected spans get their
 /// entity's action fitted to width, a string in which nothing is detected is published unchanged and listed for review,
 /// detection failures dead-letter, and every production sample rebuilds and validates. The shipped
-/// <c>Presidio:DefaultDetection</c> is off, so only the recognizers a file defines act; the checks that need Presidio's
+/// <c>Presidio:PredefinedRecognizers</c> is off, so only the recognizers a file defines act; the checks that need Presidio's
 /// predefined recognizers switch it on, and the four combinations of the switch with and without defined recognizers are
 /// checked on made-up strings.
 /// </summary>
@@ -28,10 +28,13 @@ internal static class DetectingProtectorChecks
         string recognizers = Path.Combine(projectRoot, "src", "PresidioDemo.Core", "Configuration", "recognizers");
         var files = RecognizerFileReader.ReadAll(recognizers);
         string samples = Path.Combine(projectRoot, "docs", "sample-docs");
-        var protector = new DetectingFeedProtector(files);
-        Check(!protector.DefaultDetection && !FeedPipelineConfiguration.Load(recognizers).CreateProtector().DefaultDetection
-            && FeedPipelineConfiguration.Load(recognizers, defaultDetection: true).CreateProtector().DefaultDetection,
-            "default detection is off unless Presidio:DefaultDetection switches it on");
+        // Most checks below prove what the defined recognizers do on their own, so they use a protector with Presidio's
+        // predefined recognizers off; the shipped settings (on) are checked on every sample right after the sample loop.
+        var protector = new DetectingFeedProtector(files, predefinedRecognizers: false);
+        Check(!protector.PredefinedRecognizers && new DetectingFeedProtector(files).PredefinedRecognizers
+            && FeedPipelineConfiguration.Load(recognizers).CreateProtector().PredefinedRecognizers
+            && !FeedPipelineConfiguration.Load(recognizers, predefinedRecognizers: false).CreateProtector().PredefinedRecognizers,
+            "the predefined recognizers are on unless Presidio:PredefinedRecognizers switches them off");
 
         // Detection failure: the bridge has no registry for an unconfigured feed name, so the call fails and dead-letters.
         var unconfigured = new DetectingFeedProtector(new Dictionary<FeedType, RecognizerFile> { [FeedType.ACI] = files[FeedType.ACI] });
@@ -69,6 +72,25 @@ internal static class DetectingProtectorChecks
             published++;
         }
         Console.WriteLine($"PASS {published} production samples protected, rebuilt and validated with the recognizer files");
+
+        // The shipped settings (Presidio:PredefinedRecognizers on, spaCy included): every sample is still published at the
+        // same width, and exactly these many strings change per sample, the field-list values and what Presidio's predefined
+        // recognizers and spaCy's guesses add (accepted, 26112303 W-008, W-016).
+        var shippedSettings = new DetectingFeedProtector(files);
+        shippedSettings.Configure();
+        var expectedChanged = new Dictionary<string, int>(StringComparer.Ordinal) { ["ACI.txt"] = 4, ["ACI_02.txt"] = 4, ["ACI_03.txt"] = 2, ["ACI_04.txt"] = 3, ["ACI_05.txt"] = 1, ["ACI_06.txt"] = 4 };
+        foreach (string path in Directory.EnumerateFiles(Path.Combine(samples, "ACI"), "*.txt").Order(StringComparer.Ordinal))
+        {
+            var parsed = Parse(path);
+            var outcome = await shippedSettings.ProtectAsync(FeedType.ACI, parsed, CancellationToken.None);
+            int changed = parsed.Fields.Count(f => outcome.Values[f.Id] != f.Value);
+            Check(parsed.Fields.All(f => outcome.Values[f.Id].Length == f.Value.Length)
+                && changed == expectedChanged.GetValueOrDefault(Path.GetFileName(path), -1),
+                $"{Path.GetFileName(path)}: with the shipped settings {changed} strings change at the same width");
+        }
+        Check(expectedChanged.Count == Directory.EnumerateFiles(Path.Combine(samples, "ACI"), "*.txt").Count(), "every ACI sample has an expected count");
+        Console.WriteLine("PASS with the shipped settings every sample is published with the expected predefined-recognizer masks");
+        protector.Configure();
 
         // WR-018, WR-020: one block per message; every string in exactly one group; review lines carry a reason and a fix.
         DetectionEvent[] events =
@@ -163,7 +185,7 @@ internal static class DetectingProtectorChecks
             "400 blocks written from 16 threads at once each come out whole");
         Console.WriteLine("PASS the detection log writes one grouped block per message, with a fix per review line and values only when passed (WR-018, WR-020)");
 
-        // WR-014 on the shipped file with default detection off: declared recognizers act, allowed strings and undetected
+        // WR-014 on the shipped file with predefined recognizers off: declared recognizers act, allowed strings and undetected
         // strings stay unchanged, and no predefined recognizer decides anything.
         string aciSample = Path.Combine(samples, "ACI", "ACI.txt");
         var aciOutcome = await protector.ProtectAsync(FeedType.ACI, Parse(aciSample), CancellationToken.None);
@@ -174,7 +196,7 @@ internal static class DetectingProtectorChecks
         var defined = files[FeedType.ACI].Recognizers.Select(r => r.Name).Concat((files[FeedType.ACI].LoneNames ?? []).Select(r => r.Name))
             .Concat(["allow_list", "none"]).ToHashSet(StringComparer.Ordinal);
         Check(aciOutcome.Events.All(e => e.Recognizer.Split('+').All(defined.Contains) && !e.Reasons.HasFlag(ReviewReason.SpacyGuess)),
-            "with default detection off every decision names a defined recognizer, and nothing is a spacy-guess");
+            "with predefined recognizers off every decision names a defined recognizer, and nothing is a spacy-guess");
         // AC-011: no anchor; a message whose passenger name (the old anchor's neighbour) is gone still publishes.
         var noPassengerName = ParseEdited(aciSample, FeedType.ACI, (fields, payload) =>
         {
@@ -184,7 +206,7 @@ internal static class DetectingProtectorChecks
         var stillPublished = await protector.ProtectAsync(FeedType.ACI, noPassengerName, CancellationToken.None);
         Check(stillPublished.Events.Count == noPassengerName.Fields.Count, "a message without a passenger name is protected, not dead-lettered");
 
-        // Made-up strings through the shipped file (AC-004, AC-005, AC-013), default detection off.
+        // Made-up strings through the shipped file (AC-004, AC-005, AC-013), predefined recognizers off.
         string[] shippedInputs = ["MILLER/JORDAN MR", "Please book a window seat", "3412", "UNKNOWN/JORDAN", "Contact Alex Sample", "123456789K7QX2M",
             "378282246310005", "DA12345678", "20261109 14.05.33.120", "1A2BCDE3456"];
         var shippedOutcome = await ProtectOutcomeAsync(protector, shippedInputs);
@@ -193,7 +215,7 @@ internal static class DetectingProtectorChecks
         Check(shipped[1] == "Please book a window seat", "a string in which nothing is detected is published unchanged");
         Check(shipped[2] == "3412", "a whole-string allow-list item keeps the aircraft number 3412");
         Check(shipped[3] == "**************", "an allow-list item (UNKNOWN) never releases a detected piece inside a longer string");
-        Check(shipped[4] == "Contact Alex Sample", "no spaCy PERSON guess runs with default detection off");
+        Check(shipped[4] == "Contact Alex Sample", "no spaCy PERSON guess runs with predefined recognizers off");
         // The ACI field list (QF-26112303): the record-reference prefix, the loyalty number and the unresolved identifier
         // are masked; a value outside the list, such as a card number, is published as received.
         Check(shipped[5] == "*********K7QX2M", "unresolvedRecordReference_Prefix masks only the prefix of 123456789K7QX2M");
@@ -202,7 +224,7 @@ internal static class DetectingProtectorChecks
         Check(shipped[7] == "**********", "frequentTravelerNumber masks the loyalty number DA12345678");
         Check(shipped[9] == "***********", "unresolvedIdentifier masks 1A2BCDE3456");
         Check(shipped[8] == "20261109 14.05.33.120" && shippedOutcome.Events[8].Decision == DetectionDecision.Allowed,
-            "an ACI timestamp is allowed, so Presidio's date recognizer never masks it when default detection is on");
+            "an ACI timestamp is allowed, so Presidio's date recognizer never masks it when predefined recognizers is on");
         Console.WriteLine("PASS the shipped file acts per string: declared recognizers, allow list, unchanged when nothing is detected");
 
         // AC-003, AC-006, AC-008: test-only files reconfigure the ACI registry, so the shipped one is restored afterwards.
@@ -212,10 +234,10 @@ internal static class DetectingProtectorChecks
             File.WriteAllText(file, content);
             return file;
         }
-        DetectingFeedProtector Configured(string file, bool defaultDetection = false)
+        DetectingFeedProtector Configured(string file, bool predefinedRecognizers = false)
         {
             var configured = new DetectingFeedProtector(new Dictionary<FeedType, RecognizerFile> { [FeedType.ACI] = RecognizerFileReader.Read(file, FeedType.ACI) },
-                defaultDetection);
+                predefinedRecognizers);
             configured.Configure();
             return configured;
         }
@@ -226,50 +248,50 @@ internal static class DetectingProtectorChecks
         string shippedFile = Path.Combine(recognizers, RecognizerFileReader.FileName(FeedType.ACI));
         try
         {
-            // Presidio:DefaultDetection with and without defined recognizers (made-up strings).
+            // Presidio:PredefinedRecognizers with and without defined recognizers (made-up strings).
             string[] madeUp = ["CTCEDAHK1 alex@example.com -1MILLER/JORDAN", "Contact Alex Sample", "Card 4111 1111 1111 1111", "Please book a window seat"];
             var definedOnly = await ProtectStringsAsync(protector, madeUp);
             Check(definedOnly[0] == "CTCEDAHK1 alex@example.com -1*************" && definedOnly[1] == madeUp[1] && definedOnly[2] == madeUp[2],
-                "default detection off with recognizers: only the defined ones act; the made-up email stays and the SURNAME/GIVEN name is masked");
-            var both = await ProtectOutcomeAsync(Configured(shippedFile, defaultDetection: true), madeUp);
+                "predefined recognizers off with recognizers: only the defined ones act; the made-up email stays and the SURNAME/GIVEN name is masked");
+            var both = await ProtectOutcomeAsync(Configured(shippedFile, predefinedRecognizers: true), madeUp);
             Check(both.Values["0"] == "CTCEDAHK1 **************** -1*************" && both.Values["1"] == "Contact ***********"
                 && both.Values["2"] == "Card " + new string('*', 19) && both.Values["3"] == madeUp[3],
-                $"default detection on with recognizers: both act; the email gets its own anonymizer, else DEFAULT, and Presidio's PERSON the PERSON anonymizer (got {string.Join(" | ", both.Values.Values)})");
+                $"predefined recognizers on with recognizers: both act; the email gets its own anonymizer, else DEFAULT, and Presidio's PERSON the PERSON anonymizer (got {string.Join(" | ", both.Values.Values)})");
             Check(both.Events[0].Recognizer.Split('+').Contains("passengerName") && both.Events[0].Recognizer.Split('+').Contains("EmailRecognizer")
-                && both.Events[1].Reasons.HasFlag(ReviewReason.SpacyGuess), "default detection on: the log names both kinds of recognizer, and a spaCy guess is for review");
-            var presidioOnly = await ProtectStringsAsync(Configured(empty, defaultDetection: true), madeUp);
+                && both.Events[1].Reasons.HasFlag(ReviewReason.SpacyGuess), "predefined recognizers on: the log names both kinds of recognizer, and a spaCy guess is for review");
+            var presidioOnly = await ProtectStringsAsync(Configured(empty, predefinedRecognizers: true), madeUp);
             Check(presidioOnly[0].StartsWith("CTCEDAHK1 <EMAIL_ADDRESS>  -1MILLER/", StringComparison.Ordinal) && presidioOnly[1] == "Contact <PERSON>   " && presidioOnly[3] == madeUp[3],
-                $"default detection on without recognizers: only Presidio acts (got {string.Join(" | ", presidioOnly)})");
+                $"predefined recognizers on without recognizers: only Presidio acts (got {string.Join(" | ", presidioOnly)})");
             var nothingInput = Parse(aciSample);
             var nothing = await Configured(empty).ProtectAsync(FeedType.ACI, nothingInput, CancellationToken.None);
             var nothingStrings = await ProtectStringsAsync(Configured(empty), madeUp);
             byte[] aciBytes = File.ReadAllBytes(aciSample);
             Check(nothingStrings.SequenceEqual(madeUp) && nothing.Events.All(e => e.Decision is DetectionDecision.NothingDetected or DetectionDecision.Allowed)
                 && Codec(FeedType.ACI).Serialize(nothingInput, nothing.Values).AsSpan().SequenceEqual(aciBytes),
-                "default detection off without recognizers: the output equals the input, byte for byte");
-            Console.WriteLine("PASS Presidio:DefaultDetection: off runs only the defined recognizers (none: output equals input); on adds Presidio's predefined recognizers");
+                "predefined recognizers off without recognizers: the output equals the input, byte for byte");
+            Console.WriteLine("PASS Presidio:PredefinedRecognizers: off runs only the defined recognizers (none: output equals input); on adds Presidio's predefined recognizers");
 
-            var bare = await ProtectStringsAsync(Configured(empty, defaultDetection: true), "Please book a window seat", "Contact Alex Sample", "alex@example.com", "Card 4111 1111 1111 1111");
+            var bare = await ProtectStringsAsync(Configured(empty, predefinedRecognizers: true), "Please book a window seat", "Contact Alex Sample", "alex@example.com", "Card 4111 1111 1111 1111");
             Check(bare[0] == "Please book a window seat", "an emptied file starts and publishes an undetected string unchanged");
             Check(bare[1] == "Contact <PERSON>   " && bare[2] == "<EMAIL_ADDRESS> " && bare[3] == "Card " + "<CREDIT_CARD>".PadRight(19),
-                "with default detection on and nothing configured Presidio's predefined recognizers detect, and replace is fitted to width");
-            var switchedOff = await ProtectStringsAsync(Configured(noCards, defaultDetection: true), "Card 4111 1111 1111 1111", "Contact Alex Sample", "alex@example.com");
+                "with predefined recognizers on and nothing configured Presidio's predefined recognizers detect, and replace is fitted to width");
+            var switchedOff = await ProtectStringsAsync(Configured(noCards, predefinedRecognizers: true), "Card 4111 1111 1111 1111", "Contact Alex Sample", "alex@example.com");
             Check(switchedOff[0] == "Card 4111 1111 1111 1111", "a predefined recognizer switched off detects nothing");
             Check(switchedOff[1] == "Contact ***********" && switchedOff[2] == "<EMAIL_ADDRESS> ", "an entity uses its own anonymizer, else replace");
-            var fallback = await ProtectStringsAsync(Configured(withDefault, defaultDetection: true), "alex@example.com");
+            var fallback = await ProtectStringsAsync(Configured(withDefault, predefinedRecognizers: true), "alex@example.com");
             Check(fallback[0] == "****************", "an entity without its own anonymizer uses DEFAULT");
-            Console.WriteLine("PASS with default detection on an emptied file runs Presidio's defaults; switches and anonymizers change the output with no code change");
+            Console.WriteLine("PASS with predefined recognizers on an emptied file runs Presidio's defaults; switches and anonymizers change the output with no code change");
 
-            // Review reasons as the protector produces them (made-up strings), with default detection on.
-            var guess = await ProtectOutcomeAsync(Configured(withDefault, defaultDetection: true), "Contact Alex Sample", "alex@example.com", "LI WU");
+            // Review reasons as the protector produces them (made-up strings), with predefined recognizers on.
+            var guess = await ProtectOutcomeAsync(Configured(withDefault, predefinedRecognizers: true), "Contact Alex Sample", "alex@example.com", "LI WU");
             Check(guess.Events[0].Reasons.HasFlag(ReviewReason.SpacyGuess) && !guess.Events[0].Reasons.HasFlag(ReviewReason.NoAction),
                 "a spaCy PERSON with its own anonymizer is a spacy-guess, not a no-action");
             Check(guess.Events[1].Reasons.HasFlag(ReviewReason.NoAction) && guess.Events[1].NoActionEntities.Contains("EMAIL_ADDRESS", StringComparison.Ordinal),
                 "an entity that used DEFAULT is a no-action naming that entity");
-            var mixed = await ProtectOutcomeAsync(Configured(noCards, defaultDetection: true), "Contact Alex Sample at alex@example.com");
+            var mixed = await ProtectOutcomeAsync(Configured(noCards, predefinedRecognizers: true), "Contact Alex Sample at alex@example.com");
             Check(mixed.Events[0].NoActionEntities.Contains("EMAIL_ADDRESS", StringComparison.Ordinal) && !mixed.Events[0].NoActionEntities.Contains("PERSON", StringComparison.Ordinal),
                 "the no-action fix names only the entities without their own anonymizer");
-            var cut = await ProtectOutcomeAsync(Configured(empty, defaultDetection: true), "LI WU");
+            var cut = await ProtectOutcomeAsync(Configured(empty, predefinedRecognizers: true), "LI WU");
             Check(cut.Values["0"] == "<PERS" && cut.Events[0].Reasons.HasFlag(ReviewReason.Cut), "a replace result longer than the value is cut and listed as cut");
         }
         finally
@@ -282,7 +304,7 @@ internal static class DetectingProtectorChecks
 
         // Overlaps, keep and hash with custom recognizers (made-up codes): CODE_A covers AB1234 at 0.9 and CODE_B covers
         // 1234CD at 0.7, so CODE_A wins the shared 1234 and CODE_B keeps CD. chars_to_mask counts from CODE_B's own start,
-        // so masking its first two characters changes only what CODE_A already took. Default detection is off, and the file
+        // so masking its first two characters changes only what CODE_A already took. Predefined recognizers is off, and the file
         // switches spaCy off too, because with it on spaCy reads a made-up code such as AB1234CD as a PERSON and would win
         // the whole string.
         string Codes(string actionA, string actionB) => Temporary("<recognizers feed=\"ACI\">"
@@ -359,15 +381,15 @@ internal static class DetectingProtectorChecks
             });
             await RejectAsync(() => slowProtector.ProtectAsync(FeedType.ACI, slowInput, CancellationToken.None),
                 "Local Presidio detection failed", "a pattern timeout dead-letters the message");
-            // Default detection off and no custom recognizer: the message is never sent to Presidio, so the slow pattern
-            // configured there cannot run and the strings are published as received; with default detection on the same
+            // Predefined recognizers off and no custom recognizer: the message is never sent to Presidio, so the slow pattern
+            // configured there cannot run and the strings are published as received; with predefined recognizers on the same
             // file is sent, and the timeout dead-letters it.
             var undefinedFile = new Dictionary<FeedType, RecognizerFile> { [FeedType.ACI] = files[FeedType.ACI] with { Recognizers = [] } };
-            var notSent = await new DetectingFeedProtector(undefinedFile).ProtectAsync(FeedType.ACI, slowInput, CancellationToken.None);
+            var notSent = await new DetectingFeedProtector(undefinedFile, predefinedRecognizers: false).ProtectAsync(FeedType.ACI, slowInput, CancellationToken.None);
             Check(slowInput.Fields.All(f => notSent.Values[f.Id] == f.Value),
-                "default detection off without custom recognizers: the message is not sent to Presidio and is published as received");
-            await RejectAsync(() => new DetectingFeedProtector(undefinedFile, defaultDetection: true).ProtectAsync(FeedType.ACI, slowInput, CancellationToken.None),
-                "Local Presidio detection failed", "default detection on without custom recognizers: the message is sent to Presidio");
+                "predefined recognizers off without custom recognizers: the message is not sent to Presidio and is published as received");
+            await RejectAsync(() => new DetectingFeedProtector(undefinedFile, predefinedRecognizers: true).ProtectAsync(FeedType.ACI, slowInput, CancellationToken.None),
+                "Local Presidio detection failed", "predefined recognizers on without custom recognizers: the message is sent to Presidio");
         }
         finally
         {

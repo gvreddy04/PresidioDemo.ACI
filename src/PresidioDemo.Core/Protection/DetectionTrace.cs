@@ -7,7 +7,7 @@ namespace PresidioDemo.Core.Protection;
 /// </summary>
 /// <param name="Events">The detection events, in candidate order.</param>
 /// <param name="CandidateValues">The decoded value of each candidate, by slot, or null when the protector supplied none;
-/// logged only with <c>Presidio:DetectionLogValues</c> on.</param>
+/// logged only with <c>Presidio:DetectionLog:IncludePiiValues</c> on.</param>
 public sealed record DetectionTrace(IReadOnlyList<DetectionEvent> Events, IReadOnlyList<string>? CandidateValues)
 {
 

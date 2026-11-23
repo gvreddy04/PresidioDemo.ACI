@@ -8,9 +8,9 @@ using PresidioDemo.DetectionParity;
 //   read-only; see ParityBaseline.
 //   config-checks   Loads the ACI recognizer file and requires invalid files to stop startup (V-04).
 //   bridge-json     Prints each feed's Presidio bridge configuration, one JSON document per line (Python tests), with
-//                   the shipped Presidio:DefaultDetection off.
+//                   Presidio:PredefinedRecognizers off; the Python tests switch it on per case.
 //   detection-log on|off   Runs all samples through the decoded-text path and prints the value-free detection log
-//                          when on (V-05). The worker reads the same switch from Presidio:DetectionLog.
+//                          when on (V-05). The worker reads the same switch from Presidio:DetectionLog:Enabled.
 //   spike [rounds]  Parity of the baseline values in scope (WR-019; their entity has a recognizer in the file), rebuilds,
 //                   negative samples and throughput (V-01, V-02, V-11). Writes .test-runs/spike-*/summary.json
 //                   (value-free) and report.json (values, Local only). Exit 0 when parity holds, 2 when it does not.
@@ -29,7 +29,7 @@ if (args is ["bridge-json"])
 {
     foreach (var set in RecognizerFileReader.ReadAll(Path.Combine(root, "src", "PresidioDemo.Core", "Configuration", "recognizers")).Values)
     {
-        Console.WriteLine(set.ToBridgeJson(defaultDetection: false));
+        Console.WriteLine(set.ToBridgeJson(predefinedRecognizers: false));
     }
     return 0;
 }

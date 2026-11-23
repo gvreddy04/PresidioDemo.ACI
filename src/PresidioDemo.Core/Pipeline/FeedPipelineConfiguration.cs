@@ -7,9 +7,9 @@ namespace PresidioDemo.Core.Pipeline;
 /// The validated per-feed recognizer files that drive every feed workflow (WR-014).
 /// </summary>
 /// <param name="Recognizers">The recognizer file of each feed.</param>
-/// <param name="DefaultDetection">Whether Presidio's predefined recognizers run beside the defined ones
-/// (<c>Presidio:DefaultDetection</c>); off by default, so only the recognizers each file defines act.</param>
-public sealed record FeedPipelineConfiguration(IReadOnlyDictionary<FeedType, RecognizerFile> Recognizers, bool DefaultDetection = false)
+/// <param name="PredefinedRecognizers">Whether Presidio's predefined recognizers run beside the defined ones
+/// (<c>Presidio:PredefinedRecognizers</c>); on by default, the shipped setting (WR-014).</param>
+public sealed record FeedPipelineConfiguration(IReadOnlyDictionary<FeedType, RecognizerFile> Recognizers, bool PredefinedRecognizers = true)
 {
 
     #region Methods
@@ -18,18 +18,18 @@ public sealed record FeedPipelineConfiguration(IReadOnlyDictionary<FeedType, Rec
     /// Loads and validates one recognizer XML file per feed before any input is read (WR-014).
     /// </summary>
     /// <param name="recognizerDirectory">The directory holding <c>aci.xml</c>.</param>
-    /// <param name="defaultDetection">Whether Presidio's predefined recognizers run too (<c>Presidio:DefaultDetection</c>).</param>
+    /// <param name="predefinedRecognizers">Whether Presidio's predefined recognizers run too (<c>Presidio:PredefinedRecognizers</c>).</param>
     /// <returns>The validated configuration.</returns>
     /// <exception cref="InvalidDataException">A file is missing or invalid.</exception>
-    public static FeedPipelineConfiguration Load(string recognizerDirectory, bool defaultDetection = false) =>
-        new(RecognizerFileReader.ReadAll(recognizerDirectory), defaultDetection);
+    public static FeedPipelineConfiguration Load(string recognizerDirectory, bool predefinedRecognizers = true) =>
+        new(RecognizerFileReader.ReadAll(recognizerDirectory), predefinedRecognizers);
 
     /// <summary>
     /// Creates the detecting protector for these recognizer files. Call <see cref="DetectingFeedProtector.Configure"/>
     /// after <see cref="PythonHost.Start"/>.
     /// </summary>
-    /// <returns>The protector, with or without Presidio's predefined recognizers as <see cref="DefaultDetection"/> says.</returns>
-    public DetectingFeedProtector CreateProtector() => new(Recognizers, DefaultDetection);
+    /// <returns>The protector, with or without Presidio's predefined recognizers as <see cref="PredefinedRecognizers"/> says.</returns>
+    public DetectingFeedProtector CreateProtector() => new(Recognizers, PredefinedRecognizers);
 
     /// <summary>
     /// Creates the workflow registry using the given protector.

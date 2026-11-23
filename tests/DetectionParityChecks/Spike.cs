@@ -36,7 +36,7 @@ public sealed record SpikeFinding(string Sample, string Feed, string Location, i
 
 /// <summary>
 /// The decoded-text spike (V-01, V-02, V-11): parity against the value-free baseline (WR-019), rebuilds, negative samples
-/// and throughput, with the shipped <c>Presidio:DefaultDetection</c> off. Only the baseline values whose entity a recognizer
+/// and throughput, with the shipped <c>Presidio:PredefinedRecognizers</c> on (spaCy included). Only the baseline values whose entity a recognizer
 /// defined in the feed's file produces are checked (<see cref="ParityBaseline.InScope"/>); every other value is counted as
 /// out of scope and never fails the run. Extra masking outside the baseline never fails it either.
 /// </summary>
@@ -100,7 +100,7 @@ public static class Spike
         var production = results.Where(r => !Path.GetFileName(r.Path).Contains("Negative_Testing", StringComparison.Ordinal)).ToArray();
         int rebuilt = production.Count(r => r.Output is not null);
 
-        // spaCy runs with default detection off only for a custom recognizer with context words (see presidio_demo.py).
+        // spaCy runs with predefined recognizers off only for a custom recognizer with context words (see presidio_demo.py).
         bool contextWords = files.Values.Any(file => file.Recognizers.Any(r => r.Context.Count > 0));
         var throughput = await Throughput(protector, production.Select(r => r.Path).ToArray(), rounds, contextWords);
         // WR-019: a baseline value in scope published unchanged fails until it is protected or approved; extra masking
@@ -114,7 +114,7 @@ public static class Spike
             Parity = parity ? "PASS" : "FAIL",
             Scope = "baseline values whose entity a recognizer defined in the feed's file produces: "
                 + string.Join(", ", files.Values.SelectMany(file => file.DefinedEntities).Distinct().Order(StringComparer.Ordinal)),
-            DefaultDetection = protector.DefaultDetection,
+            PredefinedRecognizers = protector.PredefinedRecognizers,
             Protected = new
             {
                 Baseline = baseline.Protected.Count,
@@ -139,7 +139,7 @@ public static class Spike
             Note = "Local spike report: contains original sample values. Never commit or copy outside .test-runs.",
             Misses = missValues
         }, ParityBaseline.JsonOptions) + Environment.NewLine);
-        Console.WriteLine($"SPIKE parity={summary.Parity} | default detection {(protector.DefaultDetection ? "on" : "off")} | " +
+        Console.WriteLine($"SPIKE parity={summary.Parity} | predefined recognizers {(protector.PredefinedRecognizers ? "on" : "off")} | " +
             $"{caught.Count + misses.Count} values in scope: {caught.Count} caught, {misses.Count} missed ({misses.Count - unapproved.Length} approved, " +
             $"{unapproved.Length} unapproved, {stale.Length} stale exceptions) | {outOfScope} values out of scope | rebuilds {rebuilt}/{production.Length}");
         Console.WriteLine("SPIKE throughput " + JsonSerializer.Serialize(throughput));
@@ -225,11 +225,11 @@ public static class Spike
         {
             Rounds = rounds,
             Messages = messages,
-            // With default detection off no recognizer reads spaCy's named entities: spaCy runs without its NER component
+            // With predefined recognizers off no recognizer reads spaCy's named entities: spaCy runs without its NER component
             // when a custom recognizer has context words, and not at all otherwise.
-            NlpNer = protector.DefaultDetection ? "on (spaCy en_core_web_lg)"
-                : contextWords ? "off (Presidio:DefaultDetection false); spaCy en_core_web_lg runs without NER for context words"
-                : "off (Presidio:DefaultDetection false); spaCy does not run (no context words)",
+            NlpNer = protector.PredefinedRecognizers ? "on (spaCy en_core_web_lg)"
+                : contextWords ? "off (Presidio:PredefinedRecognizers false); spaCy en_core_web_lg runs without NER for context words"
+                : "off (Presidio:PredefinedRecognizers false); spaCy does not run (no context words)",
             MessagesPerSecondPerTask = Math.Round(messages / total.Elapsed.TotalSeconds, 1),
             Feeds = rows,
             TasksForPeak = rows.Sum(r => r.Tasks),

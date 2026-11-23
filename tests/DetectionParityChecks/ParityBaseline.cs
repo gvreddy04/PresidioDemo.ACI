@@ -80,7 +80,7 @@ public static class ParityBaseline
 
     /// <summary>
     /// Returns whether the parity gate checks a baseline value: its entity is one a recognizer defined in its feed's file
-    /// produces. Presidio's predefined entities do not count, because they do not run with default detection off.
+    /// produces. Presidio's predefined entities do not count, because they do not run with predefined recognizers off.
     /// </summary>
     /// <param name="entry">The baseline value.</param>
     /// <param name="files">The recognizer files by feed.</param>

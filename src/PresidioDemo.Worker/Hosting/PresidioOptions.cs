@@ -3,7 +3,9 @@ using Microsoft.Extensions.Configuration;
 namespace PresidioDemo.Worker.Hosting;
 
 /// <summary>
-/// The protection configuration files, bound from the Presidio section; relative paths resolve against the application folder.
+/// The protection and detection log settings, bound from the Presidio section; relative paths resolve against the
+/// application folder. Every setting is the same in every environment; a deployment changes one with its
+/// <c>Presidio__</c> environment variable (WR-018, WR-020).
 /// </summary>
 public sealed class PresidioOptions
 {
@@ -11,38 +13,34 @@ public sealed class PresidioOptions
     #region Fields and Constants
 
     /// <summary>
-    /// The environments in which <see cref="DetectionLogValues"/> may take effect (WR-020): non-production only.
+    /// The retired keys and the keys that replace them. A retired key stops startup, so a deployment that still sets one,
+    /// such as <c>Presidio__DetectionLogValues=false</c>, cannot lose its setting silently.
     /// </summary>
-    public static readonly IReadOnlyList<string> ValuesEnvironments = Array.AsReadOnly(new[] { "Local", "Dev", "QA" });
+    private static readonly (string Retired, string Replacement)[] RetiredKeys =
+    [
+        ("DefaultDetection", "Presidio:PredefinedRecognizers"),
+        ("DetectionLogValues", "Presidio:DetectionLog:IncludePiiValues"),
+        ("DetectionLog", "Presidio:DetectionLog:Enabled")
+    ];
 
     #endregion
 
     #region Properties, Indexers
 
     /// <summary>
-    /// Gets or sets whether Presidio's predefined recognizers (email, phone, credit card, IP address, IBAN, the spaCy
+    /// Gets or sets the detection log settings (WR-018, WR-020).
+    /// </summary>
+    /// <value>Whether blocks are written and whether they carry values; both on by default.</value>
+    public DetectionLogOptions DetectionLog { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets whether Presidio's predefined recognizers (email, phone, credit card, IP address, URL, the spaCy
     /// PERSON, LOCATION, NRP and DATE_TIME guesses and the rest) run beside the recognizers defined in each feed's
-    /// recognizer file. Off in the base settings, so only the defined recognizers act; an environment settings block or the
-    /// <c>Presidio__DefaultDetection</c> environment variable sets it for one feed service. Read at startup.
+    /// recognizer file (WR-014). On by default; <c>Presidio__PredefinedRecognizers=false</c> leaves only the defined
+    /// recognizers. Read at startup.
     /// </summary>
     /// <value>True to run the predefined recognizers too, except those the file switches off.</value>
-    public bool DefaultDetection { get; set; }
-
-    /// <summary>
-    /// Gets or sets whether the detection log is written (WR-018). Off in the base settings and on in the Local environment
-    /// (QF-26111601); an environment settings block or the <c>Presidio__DetectionLog</c> environment variable sets it for one
-    /// feed service. Read at startup.
-    /// </summary>
-    /// <value>True to write one value-free line per decoded string.</value>
-    public bool DetectionLog { get; set; }
-
-    /// <summary>
-    /// Gets or sets whether each detection log line also carries the actual decoded value (WR-020). On in the base settings
-    /// (QF-26111601); it takes effect only with <see cref="DetectionLog"/> on, and only in <see cref="ValuesEnvironments"/>:
-    /// elsewhere <see cref="ApplyValuesEnvironment"/> switches it off. Read at startup.
-    /// </summary>
-    /// <value>True to append the JSON-encoded decoded value to each detection log line.</value>
-    public bool DetectionLogValues { get; set; }
+    public bool PredefinedRecognizers { get; set; } = true;
 
     /// <summary>
     /// Gets or sets the Python virtual environment folder, or null for the project's src/.venv.
@@ -58,11 +56,11 @@ public sealed class PresidioOptions
     public string RecognizerDirectory { get; set; } = "Configuration/recognizers";
 
     /// <summary>
-    /// Gets whether detection log lines carry decoded values: both <see cref="DetectionLog"/> and
-    /// <see cref="DetectionLogValues"/> are on (WR-020).
+    /// Gets whether detection log lines carry decoded values: both <see cref="DetectionLogOptions.Enabled"/> and
+    /// <see cref="DetectionLogOptions.IncludePiiValues"/> are on (WR-020).
     /// </summary>
     /// <value>True when values are appended to detection log lines.</value>
-    public bool WritesValues => DetectionLog && DetectionLogValues;
+    public bool WritesValues => DetectionLog.Enabled && DetectionLog.IncludePiiValues;
 
     #endregion
 
@@ -74,10 +72,13 @@ public sealed class PresidioOptions
     /// <param name="configuration">The environment-resolved configuration.</param>
     /// <param name="baseDirectory">The folder that relative paths resolve against.</param>
     /// <returns>The options with absolute paths.</returns>
-    /// <exception cref="InvalidOperationException">The configured Python environment has no pyvenv.cfg.</exception>
+    /// <exception cref="InvalidOperationException">A retired key is set, or the configured Python environment has no
+    /// pyvenv.cfg.</exception>
     public static PresidioOptions Load(IConfiguration configuration, string baseDirectory)
     {
-        var options = configuration.GetSection("Presidio").Get<PresidioOptions>(binder => binder.ErrorOnUnknownConfiguration = true) ?? new();
+        var section = configuration.GetSection("Presidio");
+        RejectRetiredKeys(section);
+        var options = section.Get<PresidioOptions>(binder => binder.ErrorOnUnknownConfiguration = true) ?? new();
         options.RecognizerDirectory = Path.GetFullPath(options.RecognizerDirectory, baseDirectory);
         string application = Path.TrimEndingDirectorySeparator(Path.GetFullPath(baseDirectory)) + Path.DirectorySeparatorChar;
         if (!options.RecognizerDirectory.StartsWith(application, StringComparison.OrdinalIgnoreCase))
@@ -101,20 +102,20 @@ public sealed class PresidioOptions
     }
 
     /// <summary>
-    /// Switches <see cref="DetectionLogValues"/> off in an environment outside <see cref="ValuesEnvironments"/>, so values
-    /// never reach those logs, without stopping the worker (QF-26111601; previously startup stopped). The name is the
-    /// selected environment, so an unset <c>DOTNET_ENVIRONMENT</c> that falls back to Local counts.
+    /// Stops startup when a retired key is set in the file or as an environment variable. <c>Presidio:DetectionLog</c> is
+    /// retired only as a value of its own (true or false); as a section it holds the current settings.
     /// </summary>
-    /// <param name="environment">The selected environment name.</param>
-    /// <returns>True when the values flag was on and has been switched off; the caller logs a value-free warning.</returns>
-    public bool ApplyValuesEnvironment(string environment)
+    /// <param name="section">The Presidio section.</param>
+    /// <exception cref="InvalidOperationException">A retired key is set; the message names the key that replaces it.</exception>
+    private static void RejectRetiredKeys(IConfigurationSection section)
     {
-        if (!DetectionLogValues || ValuesEnvironments.Contains(environment, StringComparer.OrdinalIgnoreCase))
+        foreach (var (retired, replacement) in RetiredKeys)
         {
-            return false;
+            if (section.GetSection(retired).Value is not null)
+            {
+                throw new InvalidOperationException($"Presidio:{retired} is no longer supported; use {replacement}.");
+            }
         }
-        DetectionLogValues = false;
-        return true;
     }
 
     #endregion

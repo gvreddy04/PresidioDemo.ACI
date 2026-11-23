@@ -75,9 +75,9 @@ public static class RecognizerFileChecks
                 && exact.MatchesWhole("UNKNOWN") && !exact.MatchesWhole("unknown"), "an exact allow list compares the whole text exactly", ref passed);
             Check(file.ToBridgeJson(false).Contains("\"disabled\":[\"CryptoRecognizer\"]", StringComparison.Ordinal)
                 && file.ToBridgeJson(false).Contains("\"denyList\":[\"MR\",\"MRS\",\"DR\"]", StringComparison.Ordinal), "the bridge JSON carries switches and deny lists", ref passed);
-            Check(file.ToBridgeJson(false).Contains("\"defaultDetection\":false", StringComparison.Ordinal)
-                && file.ToBridgeJson(true).Contains("\"defaultDetection\":true", StringComparison.Ordinal),
-                "the bridge JSON carries Presidio:DefaultDetection", ref passed);
+            Check(file.ToBridgeJson(false).Contains("\"predefinedRecognizers\":false", StringComparison.Ordinal)
+                && file.ToBridgeJson(true).Contains("\"predefinedRecognizers\":true", StringComparison.Ordinal),
+                "the bridge JSON carries Presidio:PredefinedRecognizers", ref passed);
 
             // Lone-name recognizers (type="lone_name"), declared before or after their source.
             const string LoneName = "<recognizer name=\"lonePart\" type=\"lone_name\" source=\"passengerName\" supported_entity=\"PERSON\" />";

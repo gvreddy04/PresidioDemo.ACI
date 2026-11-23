@@ -47,35 +47,35 @@ _no_nlp = {}
 def configure_feed(config_json):
     """Build one feed's Presidio registry from the .NET recognizer file (WR-014).
 
-    config_json holds feed, language, defaultDetection (Presidio:DefaultDetection), disabled and enabled (names of Presidio
+    config_json holds feed, language, predefinedRecognizers (Presidio:PredefinedRecognizers), disabled and enabled (names of Presidio
     predefined recognizers switched off or listed as on) and recognizers (custom: name, entity, patterns of name, regex and
-    score, context, denyList, denyListScore). With defaultDetection true every predefined recognizer runs beside the custom
-    ones unless it is switched off; spaCy NER provides PERSON, LOCATION, NRP and DATE_TIME. With defaultDetection false
+    score, context, denyList, denyListScore). With predefinedRecognizers true every predefined recognizer runs beside the custom
+    ones unless it is switched off; spaCy NER provides PERSON, LOCATION, NRP and DATE_TIME. With predefinedRecognizers false
     the registry holds the custom recognizers only, and spaCy runs without its named-entity component, only when a custom
     recognizer has context words (Presidio's context enhancer reads the lemmas around a match). Predefined names are checked either way, so a typo stops startup. The
     score threshold and every action are applied in .NET. Returns the feed name.
     """
     config = json.loads(config_json)
     language = config["language"]
-    default_detection = config["defaultDetection"]
-    if not isinstance(default_detection, bool):
-        raise ValueError("defaultDetection must be true or false")
+    predefined_recognizers = config["predefinedRecognizers"]
+    if not isinstance(predefined_recognizers, bool):
+        raise ValueError("predefinedRecognizers must be true or false")
     registry = RecognizerRegistry(supported_languages=[language])
     registry.load_predefined_recognizers(languages=[language], nlp_engine=nlp_engine)
     disabled = set(config["disabled"])
     unknown = (disabled | set(config.get("enabled", []))) - {r.name for r in registry.recognizers}
     if unknown:
         raise ValueError("Unknown predefined recognizer: " + ", ".join(sorted(unknown)))
-    registry.recognizers = [r for r in registry.recognizers if default_detection and r.name not in disabled]
+    registry.recognizers = [r for r in registry.recognizers if predefined_recognizers and r.name not in disabled]
     for item in config["recognizers"]:
         patterns = [Pattern(p["name"], p["regex"], float(p["score"])) for p in item["patterns"]]
         registry.add_recognizer(PatternRecognizer(supported_entity=item["entity"], name=item["name"], supported_language=language,
                                                   patterns=patterns or None, deny_list=item["denyList"] or None,
                                                   context=item["context"] or None, deny_list_score=float(item["denyListScore"])))
     # An empty registry would make AnalyzerEngine load every default recognizer, so a feed whose every recognizer is
-    # switched off, or that defines none while defaultDetection is false, gets no engine and detects nothing.
+    # switched off, or that defines none while predefinedRecognizers is false, gets no engine and detects nothing.
     engine = AnalyzerEngine(registry=registry, nlp_engine=nlp_engine, supported_languages=[language]) if registry.recognizers else None
-    nlp = "full" if default_detection else "lemmas" if any(item["context"] for item in config["recognizers"]) else "none"
+    nlp = "full" if predefined_recognizers else "lemmas" if any(item["context"] for item in config["recognizers"]) else "none"
     if nlp == "none" and language not in _no_nlp:
         _no_nlp[language] = NoOpNlpEngine(models=[{"lang_code": language, "model_name": "none"}])
         _no_nlp[language].load()
@@ -110,7 +110,7 @@ def analyze_strings(feed, texts_json, contexts_json="null"):
     _timeouts.timed_out = False
     # spaCy processes the batch at once, as BatchAnalyzerEngine.analyze_iterator does; each string is then analyzed with
     # its own context. Every span is returned, including those below the feed threshold: .NET applies the threshold and
-    # lists a string with only weak detections for review (WR-018). Without default detection no recognizer reads spaCy's
+    # lists a string with only weak detections for review (WR-018). Without predefined recognizers no recognizer reads spaCy's
     # named entities: spaCy runs without its NER component when a custom recognizer has context words, so the lemmas
     # around a match still reach the context enhancer, and not at all otherwise. Key-path context words are passed either
     # way; the enhancer skips a recognizer without context words, so empty artifacts change no result.
