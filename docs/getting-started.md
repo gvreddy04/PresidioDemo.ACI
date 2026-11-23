@@ -328,8 +328,9 @@ PRESIDIO FEED WORKER | environment Local | Ctrl+C or SIGTERM stops after the cur
 info: ...SolaceConnection[0] Provisioned 2 Solace queues on the local broker.
 info: ...SolaceConnection[0] Connected to Solace tcp://localhost:55555 (VPN default) as presidio-worker-local.
 info: ...FeedWorkerService[0] Initializing embedded local Presidio and the bundled NLP model...
-info: ...FeedWorkerService[0] Default detection off (Presidio:DefaultDetection=false): only the recognizers each feed's file defines act.
+info: ...FeedWorkerService[0] Predefined recognizers on (Presidio:PredefinedRecognizers=true): the recognizers each feed's file defines and Presidio's predefined recognizers act.
 info: ...Worker.ACI[0] ACI worker reading q.aci.raw; output airline/aci/protected; dead letter q.aci.dlq.
+warn: ...FeedWorkerService[0] Detection log on with values: each line also carries the actual decoded value, personal data included (WR-020). Set Presidio__DetectionLog__IncludePiiValues=false to keep the lines value-free.
 info: ...FeedWorkerService[0] READY: 1 feed workers on Solace.
 ```
 
@@ -549,11 +550,13 @@ environment's section, then environment variables (`__` separates levels). Set a
 |---|---|
 | `$env:Messaging__Feed = "ACI"` | The worker consumes only the ACI feed |
 | `$env:Messaging__ConsumersPerTask = "4"` | 4 consumers per input queue (1–32) |
-| `$env:Presidio__DefaultDetection = "true"` | Presidio's predefined recognizers (email, phone, card, spaCy names and the rest) run beside the passenger-name recognizer; off by default |
+| `$env:Presidio__PredefinedRecognizers = "false"` | Only the recognizers in `aci.xml` act; Presidio's predefined recognizers (email, phone, card, spaCy names and the rest) are on by default |
+| `$env:Presidio__DetectionLog__IncludePiiValues = "false"` | Detection blocks stay value-free; values are on by default |
+| `$env:Presidio__DetectionLog__Enabled = "false"` | No detection blocks; on by default |
 | `$env:Logging__LogLevel__Default = "Warning"` | Only warnings and errors, such as dead letters |
 
 The feed protection rules are in `src/PresidioDemo.Core/Configuration/recognizers/aci.xml`. It keeps passenger names
-only (the `passengerName` recognizer); with `Presidio:DefaultDetection` off, the default, nothing else is detected.
+only (the `passengerName` recognizer); with `Presidio:PredefinedRecognizers` on, the default, Presidio's predefined recognizers act too; with it off, nothing else is detected.
 The build copies it next to the worker.
 
 ## Troubleshooting
