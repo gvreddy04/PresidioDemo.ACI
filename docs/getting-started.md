@@ -219,8 +219,8 @@ embedded Presidio, over the in-memory broker:
 src\.venv\Scripts\python tests/run_sample_verification.py
 ```
 
-**You should see:** `"Published": 6` and `"all_checks_passed": true`, with `"names_in_scope": 6` and
-`"out_of_scope": 9`: the check is names-only, so it checks the baseline's `PERSON` values and only counts the rest.
+**You should see:** `"Published": 6` and `"all_checks_passed": true`, with `"in_scope": 15`,
+`"protected": 13` and `"approved_exceptions": 2`: the check covers the entities the recognizer file defines.
 No ACI negative sample is supplied, so nothing is rejected.
 
 Test output goes to `.test-runs\` (git-ignored). Some files there contain the original, unprotected sample data;

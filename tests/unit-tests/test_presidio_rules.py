@@ -84,11 +84,16 @@ class DetectionBridgeTests(unittest.TestCase):
         self.assertTrue(self.custom_names)
         self.assertTrue(all(json.loads(line)["defaultDetection"] is False for line in self.lines))
 
-    def test_passenger_names_return_spans_and_nothing_else_is_detected(self):
-        name, compound, loyalty, reference = spans("ACI", "MILLER/JORDAN", "MILLER-SMITH/ANN MARIE", "DA12345678", "123456789K7QX2M")
+    def test_the_field_list_recognizers_return_spans_and_nothing_else_is_detected(self):
+        name, compound, loyalty, reference, identifier, card = spans(
+            "ACI", "MILLER/JORDAN", "MILLER-SMITH/ANN MARIE", "DA12345678", "123456789K7QX2M", "1A2BCDE3456", "378282246310005")
         self.assertIn(("PERSON", "MILLER/JORDAN", "passengerName"), name)
         self.assertIn(("PERSON", "MILLER-SMITH/ANN MARIE", "passengerName"), compound)
-        self.assertEqual((loyalty, reference), ([], []), "names-only: a loyalty number and a record reference are not detected")
+        self.assertEqual(loyalty, [("LOYALTY_NUMBER", "DA12345678", "frequentTravelerNumber")])
+        self.assertEqual(reference, [("UNCLASSIFIED_IDENTIFIER", "123456789", "unresolvedRecordReference_Prefix")],
+                         "only the nine-digit prefix is detected; the record locator is not")
+        self.assertEqual(identifier, [("UNCLASSIFIED_IDENTIFIER", "1A2BCDE3456", "unresolvedIdentifier")])
+        self.assertEqual(card, [], "a card number is outside the ACI field list")
 
     def test_default_detection_off_with_recognizers_runs_only_the_defined_ones(self):
         mixed, guess = spans("ACI", "CTCEDAHK1 alex@example.com -1MILLER/JORDAN", "Contact Alex Sample in Paris")

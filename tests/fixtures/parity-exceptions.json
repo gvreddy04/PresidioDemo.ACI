@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "sample": "ACI_06.txt",
+    "location": "676",
+    "reason": "binary string shorter than 4 characters (raw words, WR-015); a seat field, outside the ACI field list (QF-26112303)"
+  },
+  {
+    "sample": "ACI_06.txt",
+    "location": "692",
+    "reason": "binary string shorter than 4 characters (raw words, WR-015); a seat field, outside the ACI field list (QF-26112303)"
+  }
+]

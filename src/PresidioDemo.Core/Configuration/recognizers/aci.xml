@@ -2,13 +2,19 @@
 <!--
   ACI recognizers in the Presidio-style format (WR-014): a flat list under <recognizers> that mirrors Presidio's
   recognizer registry YAML, its analyze allow_list and its anonymizers map, using Presidio's names.
-  Scope: passenger names only. The file defines the one PERSON recognizer below; every other ACI value (loyalty
-  numbers, record references and the rest) is published as received.
+  Scope: the ACI field list (QF-26112303). Each recognizer below is named after one field and finds that field's value
+  by its format in the decoded strings; the XDR field it stands for is in the comment above it. Every other ACI value
+  is published as received. Not configured:
+    /pass_code (passCode), /fcpr_nbr (fcprNumber), /oa_flt_urp (originalAirlineUrp): no sample holds a value, so their
+        format is unknown; each is added once a sample shows it.
+    /paxl_id, /pax_id: 4-byte integers, not strings, so decoded-text detection never sees them; they are published as
+        received. The unresolvedIdentifier and unresolvedRecordReference_Prefix recognizers act on the
+        unresolved_extension strings those names stand for.
   Presidio:DefaultDetection (appsettings.json, default false) decides whether Presidio's predefined recognizers run too:
-    false: only the recognizer defined here acts; Presidio's predefined recognizers (email, phone, credit card, IP,
+    false: only the recognizers defined here act; Presidio's predefined recognizers (email, phone, credit card, IP,
            IBAN, spaCy PERSON, LOCATION, NRP, DATE_TIME and the rest) do not run. Example: in
-           DA12345678 MILLER/JORDAN, only MILLER/JORDAN is masked.
-    true:  the recognizer defined here acts, plus Presidio's predefined recognizers (minus any switched off below);
+           DA12345678 MILLER/JORDAN, both the loyalty number and the name are masked, and alex@example.com is not.
+    true:  the recognizers defined here act, plus Presidio's predefined recognizers (minus any switched off below);
            their spans get their entity's <anonymizer>, else DEFAULT. Example: alex@example.com -> ****************.
   Each decoded string is decided on its own: a string that matches an <allow_list> item end to end is published
   unchanged; otherwise every span detected at or above default_score_threshold gets its entity's <anonymizer>, else
@@ -21,12 +27,31 @@
        run unless switched off by class name, for example:
        <recognizer name="CryptoRecognizer" type="predefined" enabled="false" />  ===== -->
 
-  <!-- ===== Custom pattern recognizers (Presidio type: custom): passenger names. ===== -->
+  <!-- ===== Custom pattern recognizers (Presidio type: custom): one per ACI field. ===== -->
 
-  <!-- Example: MILLER/JORDAN -> *************, MILLER-SMITH/ANN MARIE -> **********************. Presidio's PERSON misses
-       this format. -->
+  <!-- XDR /pax_name. Example: MILLER/JORDAN -> *************, MILLER-SMITH/ANN MARIE -> **********************.
+       Presidio's PERSON misses this format. -->
   <recognizer name="passengerName" type="custom" supported_entity="PERSON">
     <pattern name="surname/given" score="0.9">(?&lt;![A-Z])[A-Z]{2,}(?:[ '-][A-Z]+)*/[A-Z]*(?:[ '-][A-Z]+)*</pattern>
+  </recognizer>
+
+  <!-- XDR /fqtv_nbr: an airline code and six to twelve digits. Example: DA12345678 -> **********. -->
+  <recognizer name="frequentTravelerNumber" type="custom" supported_entity="LOYALTY_NUMBER">
+    <pattern name="airline + digits" score="0.85">(?&lt;![A-Z0-9])[A-Z]{2}\d{6,12}(?!\d)</pattern>
+  </recognizer>
+
+  <!-- XDR unresolved_extension first string (named for /paxl_id in the field list): eleven characters in the sampled
+       digit-letter-digit, four letters, four digits shape. Example: 1A2BCDE3456 -> ***********. -->
+  <recognizer name="unresolvedIdentifier" type="custom" supported_entity="UNCLASSIFIED_IDENTIFIER">
+    <pattern name="digit letter digit, four letters, four digits" score="0.85">^\d[A-Z]\d[A-Z]{4}\d{4}$</pattern>
+  </recognizer>
+
+  <!-- XDR unresolved_extension second string, its Prefix part (named for /pax_id in the field list): a nine-digit prefix
+       and a six-character record locator; only the prefix is masked, the locator stays unchanged. The locator must hold
+       a letter, so an all-digit number (such as a 15-digit card number) is not a record reference.
+       Example: 123456789K7QX2M -> *********K7QX2M. -->
+  <recognizer name="unresolvedRecordReference_Prefix" type="custom" supported_entity="UNCLASSIFIED_IDENTIFIER">
+    <pattern name="nine digits before a locator" score="0.85">^\d{9}(?=\S{0,5}[A-Z])(?=\S{6}$)</pattern>
   </recognizer>
 
   <!-- ===== Allow list: a decoded string that matches an item end to end is published unchanged. ===== -->
@@ -47,6 +72,8 @@
   <!-- ===== Anonymizers (Presidio anonymizers map): one action per entity. ===== -->
   <!-- Allowed types: mask, replace, redact, hash, keep; every result is fitted to the width it replaces (WR-015). -->
   <anonymizer entity="PERSON" type="mask" masking_char="*" />
+  <anonymizer entity="LOYALTY_NUMBER" type="mask" masking_char="*" />
+  <anonymizer entity="UNCLASSIFIED_IDENTIFIER" type="mask" masking_char="*" />
   <!-- Every other entity: with Presidio:DefaultDetection true, Presidio's EMAIL_ADDRESS, CREDIT_CARD, IP_ADDRESS,
        LOCATION and the rest. Without this line Presidio's default applies: replace with <ENTITY>. -->
   <anonymizer entity="DEFAULT" type="mask" masking_char="*" />

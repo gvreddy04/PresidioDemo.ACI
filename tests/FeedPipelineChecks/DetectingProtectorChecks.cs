@@ -186,7 +186,7 @@ internal static class DetectingProtectorChecks
 
         // Made-up strings through the shipped file (AC-004, AC-005, AC-013), default detection off.
         string[] shippedInputs = ["MILLER/JORDAN MR", "Please book a window seat", "3412", "UNKNOWN/JORDAN", "Contact Alex Sample", "123456789K7QX2M",
-            "378282246310005", "DA12345678", "20261109 14.05.33.120"];
+            "378282246310005", "DA12345678", "20261109 14.05.33.120", "1A2BCDE3456"];
         var shippedOutcome = await ProtectOutcomeAsync(protector, shippedInputs);
         string[] shipped = Enumerable.Range(0, shippedInputs.Length).Select(i => shippedOutcome.Values[i.ToString(System.Globalization.CultureInfo.InvariantCulture)]).ToArray();
         Check(shipped[0] == "****************", "a declared recognizer masks MILLER/JORDAN MR");
@@ -194,10 +194,13 @@ internal static class DetectingProtectorChecks
         Check(shipped[2] == "3412", "a whole-string allow-list item keeps the aircraft number 3412");
         Check(shipped[3] == "**************", "an allow-list item (UNKNOWN) never releases a detected piece inside a longer string");
         Check(shipped[4] == "Contact Alex Sample", "no spaCy PERSON guess runs with default detection off");
-        // Names-only: the record reference, a card number and a loyalty number are published as received.
-        Check(shipped[5] == shippedInputs[5] && shipped[6] == shippedInputs[6] && shipped[7] == shippedInputs[7]
-            && shippedOutcome.Events.Skip(5).Take(3).All(e => e.Decision == DetectionDecision.NothingDetected),
-            "names-only: a record reference, a card number and a loyalty number are published as received");
+        // The ACI field list (QF-26112303): the record-reference prefix, the loyalty number and the unresolved identifier
+        // are masked; a value outside the list, such as a card number, is published as received.
+        Check(shipped[5] == "*********K7QX2M", "unresolvedRecordReference_Prefix masks only the prefix of 123456789K7QX2M");
+        Check(shipped[6] == shippedInputs[6] && shippedOutcome.Events[6].Decision == DetectionDecision.NothingDetected,
+            "a card number is outside the field list and is published as received");
+        Check(shipped[7] == "**********", "frequentTravelerNumber masks the loyalty number DA12345678");
+        Check(shipped[9] == "***********", "unresolvedIdentifier masks 1A2BCDE3456");
         Check(shipped[8] == "20261109 14.05.33.120" && shippedOutcome.Events[8].Decision == DetectionDecision.Allowed,
             "an ACI timestamp is allowed, so Presidio's date recognizer never masks it when default detection is on");
         Console.WriteLine("PASS the shipped file acts per string: declared recognizers, allow list, unchanged when nothing is detected");

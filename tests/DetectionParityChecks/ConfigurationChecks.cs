@@ -15,9 +15,9 @@ public static class ConfigurationChecks
     #region Fields and Constants
 
     /// <summary>
-    /// The entities the feed's recognizers must produce, which set the parity gate's scope.
+    /// The entities the feed's recognizers must produce (the ACI field list, QF-26112303), which set the parity gate's scope.
     /// </summary>
-    private static readonly IReadOnlySet<string> ExpectedEntities = new HashSet<string>(StringComparer.Ordinal) { "PERSON" };
+    private static readonly IReadOnlySet<string> ExpectedEntities = new HashSet<string>(StringComparer.Ordinal) { "LOYALTY_NUMBER", "PERSON", "UNCLASSIFIED_IDENTIFIER" };
 
     #endregion
 

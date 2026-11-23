@@ -45,7 +45,7 @@ Counts below describe populated binary text/capture fields under the removed fie
 | ACI_05.txt | 832 | 18 | 1 Mask |
 | ACI_06.txt | 960 | 19 | 5 Mask |
 
-With decoded-text detection, all six samples are published through the real worker and local Presidio, with `Presidio:DefaultDetection` off. The parity check is names-only: of the 15 values the former field policies protected, the 6 names are in scope and all 6 are protected; the other 9 values (loyalty numbers and record references) are out of scope and published as received. The record locators, standalone or inside the unresolved record reference, stay unchanged. Source hashes, payload sizes, raw words, string counts, zero padding, MQ headers, row framing and newline style are preserved.
+With decoded-text detection, all six samples are published through the real worker and local Presidio, with `Presidio:DefaultDetection` off. The parity check covers the ACI field list (QF-26112303): all 15 values the former field policies protected are in scope; 13 are protected (names, loyalty numbers, unresolved identifiers and record-reference prefixes), and the 2 short seat strings in `ACI_06.txt` are approved exceptions. The record locators, standalone or inside the unresolved record reference, stay unchanged. Source hashes, payload sizes, raw words, string counts, zero padding, MQ headers, row framing and newline style are preserved.
 
 ## Configuration behavior (removed design)
 
